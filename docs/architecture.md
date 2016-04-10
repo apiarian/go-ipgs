@@ -37,7 +37,7 @@ The [Glicko2 Rating System](https://en.wikipedia.org/wiki/Glicko_rating_system) 
 
 Ratings are described by objects with the following structure:
 
-```json
+```
 {
 	"R": [rating],
 	"RD": [rating-deviation],
@@ -61,7 +61,7 @@ All of the timestamps used throughout the system are in the RFC3339 format in th
 
 IPGS Commits are used to track the history of an ongoing game from the Game Challenge phase through the full Current Game Record history. These objects have the following structure:
 
-```json
+```
 {
 	"data": {
 		"timestamp": "[commit-timestamp]",
@@ -101,7 +101,7 @@ The game challenges list stored in `/ipns/[app-space]/challenges/` is a flat lis
 
 The challenge offer is a type of Current Game Record commit. Its data payload contains the following data:
 
-```json
+```
 {
 	"timeout": "[challenge-timeout-timestamp]",
 	"game": "[game-name]",
@@ -142,13 +142,13 @@ The `challenger-rating` field specifies the challenger's current assessment of t
 
 The `target-rating` field specifies the rating of the players that the challenge is targeting. This is the rating at which the challenger would like to play. Players within this rating range are welcome. Players outside of this range may accept the challenge, but are less likely to get a game confirmation from the challenger.
 
-The `first-turn` field specifies the player that will be making the first move of the game. This field may be set to `challenger`, `condender`, or `automatic`. The `automatic` value indicates that the game rules decide the player who gets the first turn. In go this would usually be the lower-ranked player playing black.
+The `first-turn` field specifies the player that will be making the first move of the game. This field may be set to `challenger`, `contender`, or `automatic`. The `automatic` value indicates that the game rules decide the player who gets the first turn. In go this would usually be the lower-ranked player playing black.
 
 The `comments` field is an arbitrary text data field to be used at the challenger's discretion.
 
 #### Time Control: `absolute`
 
-```json
+```
 {
 	"type": "absolute",
 	"seconds-per-player": 36000
@@ -159,7 +159,7 @@ This `time-control` `type` specifies the absolute number of seconds provided to 
 
 #### Time Control: `fixed`
 
-```json
+```
 {
 	"type": "fixed",
 	"seconds-per-move": 3600
@@ -176,7 +176,7 @@ For go, the `board-width` and `board-height` fields specify the shape of the gam
 
 The challenge acceptance is a type of Current Game Record commit. Its data payload contains the following data:
 
-```json
+```
 {
 	"timeout": "[challenge-acceptance-timeout-timestamp]",
 	"condender-rating": {
@@ -197,7 +197,7 @@ The `comments` field is an arbitrary text data field used at the contender's dis
 
 The challenge confirmation is a type of Current Came Record commit. Its data payload contains the following data:
 
-```json
+```
 {
 	"timeout": "[challenge-confirmation-timeout-timestamp",
 	"first-turn": "challenger",
@@ -229,7 +229,7 @@ The Current Game Record is a series of commit objects. The initial commit is the
 
 The game step is a type of Current Game Record commit. Its data payload contains the following data:
 
-```js
+```
 ";[SGF-node]"
 ```
 
@@ -288,7 +288,7 @@ The player database is stored in the `/ipns/[app-space]/players` list. The data 
 
 ### Player Data Object
 
-```json
+```
 {
 	"links": [
 		{ "hash": "[author-public-key-hash]", "size": [author-public-key-size],
@@ -338,6 +338,11 @@ The player database is stored in the `/ipns/[app-space]/players` list. The data 
 		"final-adjusted-rating": {
 			"R": 1400,
 			"RD": 80
+		},
+		"flags": {
+			"failed-to-sign-lost-game": 1,
+			"failed-to-sign-won-game": 2,
+			"toxic-comments": 3
 		}
 	}
 }
