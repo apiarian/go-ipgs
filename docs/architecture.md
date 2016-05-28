@@ -20,6 +20,43 @@ Go, also known as baduk and weiqui, is an ancient and still popular turn based s
 All of the public data for a node is stored in the `/ipns/[node-id]/interplanetary-game-system/` namespace. This namespace is a tree signed with the node private key containing all of the objects necessary for the system. The namespace will be abbreviated in this document as `/ipns/[app-space]/`. 
 
 
+## IPNS Content Outline
+
+```
+ipns/[node-id]/interplanetary-game-system/
+| identity.gpg
+| my-nodes.txt
+| my-nodes.sig
+| version
+| last-updated
+| challenges/
+| | challenge-offer-1-head/ # ipgs-commit
+| | | committer-public-key
+| | | parent
+| | | data
+| | challenge-offer-2-head/ # ipgs-commit
+| | | committer-public-key
+| | | parent
+| | | data
+| current-games/
+| | current-game-1-head/ # ipgs-commit
+| | | committer-public-key
+| | | parent
+| | | data
+| archive/
+| | player-hash-1/
+| | | game-hash-1 # game-history-object
+| | | game-hash-2 # game-history-object
+| | player-hash-2/
+| | | game-hash-3 # game-history-object
+| | | game-hash-4 # game-history-object
+| players/
+| | player-public-key-hash-1 # player-data-object
+| | player-public-key-hash-2 # player-data-object
+| | player-public-key-hash-3 # player-data-object
+```
+
+
 ## Player Identity
 
 Though the IPFS system has the concept of nodes identified by their public/private key pair, this is insufficient for tracking players in a game network. A player may wish to maintain multiple access nodes to the network (home computer, mobile device, backup server). Sharing the node key pair between these machines is unsupported, could pose a security risk, and would probably be inconvenient.
@@ -56,6 +93,10 @@ The version of the protocol implemented by the game node is published in `/ipns/
 
 All of the timestamps used throughout the system are in the RFC3339 format in the UTC timezone. For example: `2016-01-25T17:45:15.2Z`. Up to 9 decimal places may be used in the seconds field, though it is unlikely that any are actually necessary. The nodes should be using NTP to synchronize their node clocks with the internet for best results.
 
+
+## Last-Updated
+
+The `/ipns/[app-space]/last-updated` node contains a simple timestamp in its data field indicating the last time the namespace was updated.
 
 ## IPGS Commits
 
