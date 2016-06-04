@@ -24,11 +24,11 @@ All of the public data for a node is stored in the `/ipns/[node-id]/interplaneta
 
 ```
 ipns/[node-id]/interplanetary-game-system/
-| identity.gpg
+| data: "[last-updated-timestamp]"
+| identity.asc
 | my-nodes.txt
 | my-nodes.sig
 | version
-| last-updated
 | challenges/
 | | challenge-offer-1-head/ # ipgs-commit
 | | | committer-public-key
@@ -63,7 +63,7 @@ Though the IPFS system has the concept of nodes identified by their public/priva
 
 A standard GPG key pair is proposed as the basis of identity for a player entity in this system. The master key pair is the main source of a player's identity, while a signing subkey is used in the day to day interactions with the system.  An existing GPG key could be used, or a new one could be generated for the game system. 
 
-The public half of the key is stored at `/ipns/[app-space]/identity.gpg` as binary file. This form of public signature can be created using the `gpg --output identity.asc --export player@example.com` command. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
+The public half of the key is stored at `/ipns/[app-space]/identity.asc` as ASCII armored text file. This form of public signature can be created using the `gpg --armor --output identity.asc --export player@ipgs` command. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
 
 The list of nodes, including the current node, associated with the identity is stored at `/ipns/[app-space]/my-nodes.txt`. The file contains Node-IDs, one per line. The associated GPG signature for this list is stored at `/ipns/[app-space]/my-nodes.sig`. This kind of signature can be created using the `gpg --output my-nodes.sig --detach-sig my-nodes.txt` command.
 

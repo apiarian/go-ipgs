@@ -12,10 +12,46 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sync"
+	"time"
+
+	ipfs_shell "github.com/ipfs/go-ipfs-api"
+	ipfs_config "github.com/ipfs/go-ipfs/repo/config"
 
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/openpgp/armor"
 )
+
+var (
+	cache     map[string]interface{}
+	cacheLock sync.Mutex
+)
+
+func writeCache(k string, v interface{}) {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+	cache[k] = v
+}
+
+func readCache(k string) interface{} {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+	return cache[k]
+}
+
+func readCacheString(k string) string {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+	v := cache[k]
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
+
+func init() {
+	cache = make(map[string]interface{})
+}
 
 func main() {
 	usr, err := user.Current()
@@ -73,8 +109,21 @@ func main() {
 		}
 	}
 	if nodeEntity == nil {
-		log.Fatalf("could not find %s in the provate keyring", config.GPG.ShortKeyID)
+		log.Fatalf("could not find %s in the private keyring", config.GPG.ShortKeyID)
 	}
+
+	publicKeyFile, err := os.Create(filepath.Join(*ipgsDir, "identity.asc"))
+	if err != nil {
+		log.Fatalln("failed to create public key file:", err)
+	}
+	defer publicKeyFile.Close()
+	publicEncoder, err := armor.Encode(publicKeyFile, openpgp.PublicKeyType, nil)
+	if err != nil {
+		log.Fatalln("failed to create armorer for private key:", err)
+	}
+	nodeEntity.Serialize(publicEncoder)
+	publicEncoder.Close()
+	publicKeyFile.Close()
 
 	var b bytes.Buffer
 	_, err = b.WriteString("IPGS hello world")
@@ -90,6 +139,43 @@ func main() {
 		log.Fatalln("failed to make signer thing:", err)
 	}
 	log.Printf("the signature functionality can be checked by invoking `echo -n 'IPGS hello world' | gpg --verify %s -`\n", sigFile.Name())
+
+	fn, err := ipfs_config.Filename(config.IPFS.Path)
+	if err != nil {
+		log.Fatalln("failed to build IPFS config filename:", err)
+	}
+	ipfsConfigBytes, err := ioutil.ReadFile(fn)
+	if err != nil {
+		log.Fatalln("failed to read IPFS config file:", err)
+	}
+	var ipfsConfig ipfs_config.Config
+	err = json.Unmarshal(ipfsConfigBytes, &ipfsConfig)
+	if err != nil {
+		log.Fatalln("failed to process IPFS config json:", err)
+	}
+	log.Println("going to try connecting to IPFS node at", ipfsConfig.Addresses.API)
+
+	s := ipfs_shell.NewShell(ipfsConfig.Addresses.API)
+	id, err := s.ID()
+	if err != nil {
+		log.Fatalln("failed to get ID from IPFS node:", err)
+	}
+	log.Printf("connected to peer ID %s\n", id.ID)
+	writeCache("ipfs-node-id", id.ID)
+
+	as, err := LoadCurrentAppSpace(*ipgsDir, config, s)
+	if err != nil {
+		log.Fatalln("failed to load current app space:", err)
+	}
+	log.Printf("loaded app-space: %+v\n", as)
+
+	as.LastUpdated = time.Now()
+
+	err = as.Publish(*ipgsDir, config, s)
+	if err != nil {
+		log.Fatalln("failed to publish app space:", err)
+	}
+	log.Printf("published app-space: %+v\n", as)
 }
 
 func initializeNode(nodeDir string) {
@@ -175,17 +261,6 @@ func initializeNode(nodeDir string) {
 				log.Fatalln("failed to selfsign identity:", err)
 			}
 		}
-		publicKeyFile, err := os.Create(filepath.Join(dir, "public.asc"))
-		if err != nil {
-			log.Fatalln("failed to create public key file:", err)
-		}
-		defer publicKeyFile.Close()
-		publicEncoder, err := armor.Encode(publicKeyFile, openpgp.PublicKeyType, nil)
-		if err != nil {
-			log.Fatalln("failed to create armorer for private key:", err)
-		}
-		entity.Serialize(publicEncoder)
-		publicEncoder.Close()
 		privateKeyFile, err := os.Create(filepath.Join(dir, "private.asc"))
 		if err != nil {
 			log.Fatalln("failed to create private key file:", err)
@@ -228,6 +303,12 @@ func initializeNode(nodeDir string) {
 				log.Println("deleted private key file")
 			}
 		}
+	}
+
+	config.IPFS.Path, err = ipfs_config.Path("", "")
+	if err != nil {
+		log.Println("failed to get the path from IPFS:", err, "; using default")
+		config.IPFS.Path = ipfs_config.DefaultPathRoot
 	}
 
 	config = getConfigFromUser(config)
