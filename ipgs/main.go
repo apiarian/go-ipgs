@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"sync"
 	"time"
 
 	ipfs_shell "github.com/ipfs/go-ipfs-api"
@@ -20,40 +19,13 @@ import (
 
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/openpgp/armor"
+
+	"github.com/apiarian/go-ipgs/cache"
 )
-
-var (
-	cache     map[string]interface{}
-	cacheLock sync.Mutex
-)
-
-func writeCache(k string, v interface{}) {
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
-	cache[k] = v
-}
-
-func readCache(k string) interface{} {
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
-	return cache[k]
-}
-
-func readCacheString(k string) string {
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
-	v := cache[k]
-	if v == nil {
-		return ""
-	}
-	return v.(string)
-}
-
-func init() {
-	cache = make(map[string]interface{})
-}
 
 func main() {
+	cch := cache.NewCache()
+
 	usr, err := user.Current()
 	if err != nil {
 		log.Fatalln("failed to detect user:", err)
@@ -161,9 +133,9 @@ func main() {
 		log.Fatalln("failed to get ID from IPFS node:", err)
 	}
 	log.Printf("connected to peer ID %s\n", id.ID)
-	writeCache("ipfs-node-id", id.ID)
+	cch.Write("ipfs-node-id", id.ID)
 
-	as, err := LoadCurrentAppSpace(*ipgsDir, config, s)
+	as, err := LoadCurrentAppSpace(cch, *ipgsDir, config, s)
 	if err != nil {
 		log.Fatalln("failed to load current app space:", err)
 	}
@@ -171,7 +143,7 @@ func main() {
 
 	as.LastUpdated = time.Now()
 
-	err = as.Publish(*ipgsDir, config, s)
+	err = as.Publish(cch, *ipgsDir, config, s)
 	if err != nil {
 		log.Fatalln("failed to publish app space:", err)
 	}

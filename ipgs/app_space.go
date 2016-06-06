@@ -10,6 +10,8 @@ import (
 	"time"
 
 	ipfs_shell "github.com/ipfs/go-ipfs-api"
+
+	"github.com/apiarian/go-ipgs/cache"
 )
 
 type AppSpace struct {
@@ -19,7 +21,7 @@ type AppSpace struct {
 	LastUpdated time.Time
 }
 
-func LoadCurrentAppSpace(nodeDir string, config Config, shell *ipfs_shell.Shell) (*AppSpace, error) {
+func LoadCurrentAppSpace(cch *cache.Cache, nodeDir string, config Config, shell *ipfs_shell.Shell) (*AppSpace, error) {
 	as := &AppSpace{}
 
 	ident := filepath.Join(nodeDir, "identity.asc")
@@ -38,7 +40,11 @@ func LoadCurrentAppSpace(nodeDir string, config Config, shell *ipfs_shell.Shell)
 	as.Identity = ident
 
 	var foundAppSpace bool
-	s, err := shell.Resolve(readCache("ipfs-node-id").(string))
+	nodeID, err := cch.ReadString("ipfs-node-id")
+	if err != nil {
+		nodeID = ""
+	}
+	s, err := shell.Resolve(nodeID)
 	if err != nil && !strings.HasSuffix(err.Error(), "Could not resolve name.") {
 		return nil, fmt.Errorf("failed to resolve IPFS node's ipns value: %s", err)
 	}
@@ -93,7 +99,7 @@ func LoadCurrentAppSpace(nodeDir string, config Config, shell *ipfs_shell.Shell)
 	return as, nil
 }
 
-func (as *AppSpace) Publish(nodeDir string, config Config, shell *ipfs_shell.Shell) error {
+func (as *AppSpace) Publish(cch *cache.Cache, nodeDir string, config Config, shell *ipfs_shell.Shell) error {
 	fsAStmp := filepath.Join(nodeDir, "app-space-tmp")
 	err := os.RemoveAll(fsAStmp)
 	if err != nil {
@@ -126,7 +132,7 @@ func (as *AppSpace) Publish(nodeDir string, config Config, shell *ipfs_shell.She
 		return fmt.Errorf("failed to move rename %s: %s", fsAStmp, err)
 	}
 
-	identIPFS := readCacheString("ipgs-node-identity")
+	identIPFS, _ := cch.ReadString("ipgs-node-identity")
 	if identIPFS == "" {
 		identName := filepath.Join(nodeDir, "identity.asc")
 		identFile, err := os.Open(identName)
@@ -164,7 +170,11 @@ func (as *AppSpace) Publish(nodeDir string, config Config, shell *ipfs_shell.She
 	}
 	log.Println("app-space object:", appSpaceIPFS)
 
-	s, err := shell.Resolve(readCacheString("ipfs-node-id"))
+	nodeID, err := cch.ReadString("ipfs-node-id")
+	if err != nil {
+		nodeID = ""
+	}
+	s, err := shell.Resolve(nodeID)
 	if err != nil && !strings.HasSuffix(err.Error(), "Could not resolve name.") {
 		return fmt.Errorf("failed to resolve IPFS node's ipns value: %s", err)
 	}
