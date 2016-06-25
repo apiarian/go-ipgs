@@ -17,7 +17,7 @@ Go, also known as baduk and weiqui, is an ancient and still popular turn based s
 
 ## IPNS Namespace
 
-All of the public data for a node is stored in the `/ipns/[node-id]/interplanetary-game-system/` namespace. This namespace is a tree signed with the node private key containing all of the objects necessary for the system. The namespace will be abbreviated in this document as `/ipns/[app-space]/`. 
+All of the public data for a node is stored in the `/ipns/[node-id]/interplanetary-game-system/` namespace. This namespace is a tree signed with the node private key containing all of the objects necessary for the system. The namespace will be abbreviated in this document as `/ipns/[state]/`. 
 
 
 ## IPNS Content Outline
@@ -63,9 +63,9 @@ Though the IPFS system has the concept of nodes identified by their public/priva
 
 A standard GPG key pair is proposed as the basis of identity for a player entity in this system. The master key pair is the main source of a player's identity, while a signing subkey is used in the day to day interactions with the system.  An existing GPG key could be used, or a new one could be generated for the game system. 
 
-The public half of the key is stored at `/ipns/[app-space]/identity.asc` as ASCII armored text file. This form of public signature can be created using the `gpg --armor --output identity.asc --export player@ipgs` command. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
+The public half of the key is stored at `/ipns/[state]/identity.asc` as ASCII armored text file. This form of public signature can be created using the `gpg --armor --output identity.asc --export player@ipgs` command. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
 
-The list of nodes, including the current node, associated with the identity is stored at `/ipns/[app-space]/my-nodes.txt`. The file contains Node-IDs, one per line. The associated GPG signature for this list is stored at `/ipns/[app-space]/my-nodes.sig`. This kind of signature can be created using the `gpg --output my-nodes.sig --detach-sig my-nodes.txt` command.
+The list of nodes, including the current node, associated with the identity is stored at `/ipns/[state]/my-nodes.txt`. The file contains Node-IDs, one per line. The associated GPG signature for this list is stored at `/ipns/[state]/my-nodes.sig`. This kind of signature can be created using the `gpg --output my-nodes.sig --detach-sig my-nodes.txt` command.
 
 
 ## Player Rating
@@ -86,7 +86,7 @@ The `[rating]` is the numerical rating. The `[rating-deviation]` is the numerica
 
 ## Version
 
-The version of the protocol implemented by the game node is published in `/ipns/[app-space]/version`. This link points to the protocol description document in the `/ipfs` namespace.
+The version of the protocol implemented by the game node is published in `/ipns/[state]/version`. This link points to the protocol description document in the `/ipfs` namespace.
 
 
 ## Timestamps
@@ -96,7 +96,7 @@ All of the timestamps used throughout the system are in the RFC3339 format in th
 
 ## Last-Updated
 
-The `/ipns/[app-space]/last-updated` node contains a simple timestamp in its data field indicating the last time the namespace was updated.
+The `/ipns/[state]/last-updated` node contains a simple timestamp in its data field indicating the last time the namespace was updated.
 
 ## IPGS Commits
 
@@ -136,7 +136,7 @@ The `data` link points to an appropriate object based on the `[commit-type-name]
 
 ## Game Challenges
 
-The game challenges list stored in `/ipns/[app-space]/challenges/` is a flat list containing the first commits of Current Game Records. The challenges in this list are identified by the name `[challenging-player-hash]|[challenge-timestamp]`. Players wishing to accept the challenge may create an analogous entry in their Current Games list and committing their challenge acceptance to the Current Game Record. A game is considered started when the challenger also moves the Current Game Record to their current games list and commits their challenge confirmation to the record.  If multiple contenders accept a public challenge, the choice of opponent is left to the challenger.
+The game challenges list stored in `/ipns/[state]/challenges/` is a flat list containing the first commits of Current Game Records. The challenges in this list are identified by the name `[challenging-player-hash]|[challenge-timestamp]`. Players wishing to accept the challenge may create an analogous entry in their Current Games list and committing their challenge acceptance to the Current Game Record. A game is considered started when the challenger also moves the Current Game Record to their current games list and commits their challenge confirmation to the record.  If multiple contenders accept a public challenge, the choice of opponent is left to the challenger.
 
 ### Challenge Offer
 
@@ -260,7 +260,7 @@ A Current Game Record that goes through the three stages of challenge, but does 
 
 ## Current Games
 
-The current games list stored in `/ipns/[app-space]/current-games/` is the primary means of communicating game state between players. The Current Game Record objects in this list are identified by the name `[challenging-player-hash]|[challenge-timestamp]|[accepting-player-hash]`.
+The current games list stored in `/ipns/[state]/current-games/` is the primary means of communicating game state between players. The Current Game Record objects in this list are identified by the name `[challenging-player-hash]|[challenge-timestamp]|[accepting-player-hash]`.
 
 ### Current Game Record
 
@@ -289,14 +289,14 @@ The game ends when both players follow a `;RE[...]` node with a pair of `;C[]` n
 
 ## Finished Games
 
-Games that have been resolved but don't have a signature yet are listed in `/ipns/[app-space]/finished-games/`. When a game is deemed to be finished its Current Game Record objects are converted into a final standardized SGF game record file that will be used in the Game Archive. Each player stores a partial Game History Object list in the finished games list identified by the name `[challenging-player-hash]|[challenge-timestamp]|[responding-player-hash]`. The object contains the game record file and player's signature of the game record file. When both players' signatures are available, the Game History Object is moved to the Game Archive.
+Games that have been resolved but don't have a signature yet are listed in `/ipns/[state]/finished-games/`. When a game is deemed to be finished its Current Game Record objects are converted into a final standardized SGF game record file that will be used in the Game Archive. Each player stores a partial Game History Object list in the finished games list identified by the name `[challenging-player-hash]|[challenge-timestamp]|[responding-player-hash]`. The object contains the game record file and player's signature of the game record file. When both players' signatures are available, the Game History Object is moved to the Game Archive.
 
-If a player does not agree with outcome of a game they may move the game back to their `/ipns/[app-space]/currnet-games/` list with the special game step data object: `";C[OUTCOME-DISPUTED-PLEASE-CONTINUE]"`. The other player may then follow suit and resume play.
+If a player does not agree with outcome of a game they may move the game back to their `/ipns/[state]/currnet-games/` list with the special game step data object: `";C[OUTCOME-DISPUTED-PLEASE-CONTINUE]"`. The other player may then follow suit and resume play.
 
 
 ## Game Archive
 
-The game archive is a collection of lists. The lists are identified by player public key hashes. Each list includes all of the Game History Objects that the player participated in. A game played by Alice and Bob would be linked in both Alice's and Bob's lists. Since the Game History Objects are identical for both players, they are only stored in disk one time. The lists are stored at `/ipns/[app-space]/archive/[player-hash]/` with the Game History Objects underneath. The Game History Objects are identified by their IPFS hashes. 
+The game archive is a collection of lists. The lists are identified by player public key hashes. Each list includes all of the Game History Objects that the player participated in. A game played by Alice and Bob would be linked in both Alice's and Bob's lists. Since the Game History Objects are identical for both players, they are only stored in disk one time. The lists are stored at `/ipns/[state]/archive/[player-hash]/` with the Game History Objects underneath. The Game History Objects are identified by their IPFS hashes. 
 
 ### Game History Object
 
@@ -325,7 +325,7 @@ Things to definitely include:
 
 ## Player Database
 
-The player database is stored in the `/ipns/[app-space]/players` list. The data contains the last timestamp of the last modification to this list. The links point to the latest player data objects for each player that the node is tracking (including the owner), named by the `[player-public-key-hash]`.
+The player database is stored in the `/ipns/[state]/players` list. The data contains the last timestamp of the last modification to this list. The links point to the latest player data objects for each player that the node is tracking (including the owner), named by the `[player-public-key-hash]`.
 
 ### Player Data Object
 

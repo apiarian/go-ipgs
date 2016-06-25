@@ -1,11 +1,11 @@
-package main
+// Package config describes the configuration required for the ipgs system
+package config
 
 import (
+	"encoding/json"
 	"fmt"
-	"log"
-	"os/user"
-	"reflect"
-	"strings"
+	"os"
+	"path/filepath"
 )
 
 // Config describes the configuration for an IPGS node. It contains various
@@ -15,6 +15,8 @@ type Config struct {
 	GPG GpgConfig
 	// IPFS is the IPFS Configuration section for the IPGS node.
 	IPFS IpfsConfig
+	// IPGS is the IPGS Configuration section for the IPGS node.
+	IPGS IpgsConfig
 }
 
 // GpgConfig describes the GPG Configuration section for an IPGS node. It
@@ -41,53 +43,29 @@ type IpfsConfig struct {
 	Path string `description:"the location of the IPFS path" default:"~/.ipfs/"`
 }
 
-func getConfigFromUser(config Config) Config {
-	cv := reflect.ValueOf(&config).Elem()
-	ct := reflect.TypeOf(config)
-	for i := 0; i < cv.NumField(); i++ {
-		sv := cv.Field(i)
-		st := ct.Field(i)
-		for j := 0; j < sv.NumField(); j++ {
-			pv := sv.Field(j)
-			pt := st.Type.Field(j)
-			var d string
-			if reflect.DeepEqual(pv.Interface(), reflect.Zero(pt.Type).Interface()) {
-				d = pt.Tag.Get("default")
-			} else {
-				d = fmt.Sprintf("%s", pv)
-			}
-			if strings.HasPrefix(d, "~/") {
-				u, err := user.Current()
-				if err != nil {
-					log.Fatalln("failed to detect user:", err)
-				}
-				d = strings.Replace(d, "~/", u.HomeDir+"/", 1)
-			}
-			v := getStringForPromptOrFatal(
-				fmt.Sprintf(
-					"%s - %s (%s)",
-					st.Name,
-					pt.Name,
-					pt.Tag.Get("description"),
-				),
-				d,
-			)
-			if pt.Tag.Get("required") == "true" && v == "" {
-				log.Fatalf(
-					"missing required value for property %s",
-					pt.Name,
-				)
-			}
-			switch pv.Kind() {
-			case reflect.String:
-				pv.SetString(v)
-			default:
-				log.Fatalf(
-					"do not know how to deal with reflect kind %s\n",
-					pv.Kind(),
-				)
-			} // switch pv kind
-		} // for j over section fields
-	} // for i over config sections
-	return config
+// IpgsConfig describes the IPGS Configuration section for an IPGS node. It
+// contains flags affecting the behavior of the node during normal operation.
+type IpgsConfig struct {
+	// UnpinIPNS can be set to true to unpin the previous IPNS object when
+	// publishing a new state congiguration
+	UnpinIPNS bool
+}
+
+// Save marshals the config into a proper JSON file in th nodeDir provided
+func (c Config) Save(nodeDir string) error {
+	cJSON, err := json.MarshalIndent(c, "", "\t")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config into json: %s", err)
+	}
+
+	cFile, err := os.Create(filepath.Join(nodeDir, "config.json"))
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %s", err)
+	}
+	defer cFile.Close()
+
+	cFile.Write(cJSON)
+	cFile.WriteString("\n")
+
+	return nil
 }
