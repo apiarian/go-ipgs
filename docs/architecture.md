@@ -345,6 +345,10 @@ The player database is stored in the `/ipns/[state]/players` list. The data cont
 	"data": {
 		"timestamp": [data-timestamp],
 		"name": "Friendly Name",
+		"nodes": [
+			"[node-id-1]",
+			"[node-id-2]",
+		],
 		"current-game-records": [
 			"[current-game-record-1-head-hash]",
 			"[current-game-record-2-head-hash]",

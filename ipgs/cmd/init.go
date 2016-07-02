@@ -22,8 +22,8 @@ package cmd
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -32,8 +32,8 @@ import (
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/openpgp/armor"
 
-	"os"
-
+	"github.com/apiarian/go-ipgs/cache"
+	"github.com/apiarian/go-ipgs/ipgs/common"
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
 	"github.com/apiarian/go-ipgs/util"
@@ -72,7 +72,7 @@ var initCmd = &cobra.Command{
 		err = c.Save(nodeDir)
 		util.FatalIfErr("save the configuration", err)
 
-		err = bootstrapState(nodeDir, gpgCfg)
+		err = bootstrapState(nodeDir, c)
 		util.FatalIfErr("bootstrap the state", err)
 
 		log.Println("ipgs is now configured")
@@ -202,7 +202,15 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 		}
 		email, err := util.GetStringForPrompt(
 			"OpenPGP Entity Email",
-			"@ipgs",
+			fmt.Sprintf(
+				"%s@ipgs",
+				strings.Replace(
+					strings.ToLower(name),
+					" ",
+					"",
+					-1,
+				),
+			),
 		)
 		if err != nil {
 			return c, fmt.Errorf("failed to get OpenPGP Entity Email: %s", err)
@@ -319,33 +327,75 @@ func getIpfsConfig() (config.IpfsConfig, error) {
 	return c, nil
 }
 
-func bootstrapState(nodeDir string, gpgCfg config.GpgConfig) error {
+func bootstrapState(nodeDir string, cfg config.Config) error {
 	// write the identity file to the node directory, not the state since it
 	// won't be changing for the life of the node and we don't need to keep
 	// copying and moving it around when we do our state dance
-	idFilename, err := writeIdentityFile(nodeDir, gpgCfg)
+	idFilename, err := writeIdentityFile(nodeDir, cfg.GPG)
 	if err != nil {
 		return fmt.Errorf("could not write identity file: %s", err)
 	}
 
-	asDir := filepath.Join(nodeDir, "state")
-	err = os.MkdirAll(asDir, 0750)
+	c := cache.NewCache()
+	s, err := common.MakeIpfsShell(cfg, c)
 	if err != nil {
-		return fmt.Errorf("could not create state directory: %s", err)
+		return fmt.Errorf("could not create IPFS shell: %s", err)
+	}
+
+	pubKeyHash, err := s.AddPermanentFile(idFilename)
+	if err != nil {
+		return fmt.Errorf("could not add identity.asc permanently: %s", err)
+	}
+
+	_, prvRing, err := util.GetPublicPrivateRings(cfg.GPG.Home)
+	if err != nil {
+		return fmt.Errorf("could not load private keyring: %s", err)
+	}
+	entity, err := util.FindEntityForKeyId(prvRing, cfg.GPG.ShortKeyID)
+	if err != nil {
+		return fmt.Errorf("could not find the node's identity: %s", err)
+	}
+	var n string
+	for _, v := range entity.Identities {
+		n = v.UserId.Name
+		break
+	}
+
+	name, err := util.GetStringForPrompt(
+		"player name",
+		n,
+	)
+	if err != nil {
+		return fmt.Errorf("could not get player name from user: %s", err)
+	}
+
+	nodeId, err := s.ID()
+	if err != nil {
+		return fmt.Errorf("failed to read ID from IPFS node: %s", err)
+	}
+	nodesStr, err := util.GetStringForPrompt(
+		"IPFS backing nodes (comma separated list of IDs)",
+		nodeId.ID,
+	)
+	nodes := strings.Split(nodesStr, ",")
+
+	player := &state.Player{
+		PublicKeyHash:       pubKeyHash,
+		PreviousVersionHash: "",
+		Timestamp:           state.IPGSTime{time.Now()},
+		Name:                name,
+		Nodes:               nodes,
 	}
 
 	st := state.State{
 		Identity:    idFilename,
-		LastUpdated: time.Time{},
+		LastUpdated: state.IPGSTime{time.Now()},
+		Players:     []*state.Player{player},
 	}
 
-	err = ioutil.WriteFile(
-		filepath.Join(asDir, "last-updated"),
-		[]byte(st.LastUpdatedForOutput()),
-		0644,
-	)
+	err = st.Publish(nodeDir, cfg, s)
 	if err != nil {
-		return fmt.Errorf("could not write last-updated file: %s", err)
+		return fmt.Errorf("could not publish initial state: %s", err)
 	}
 
 	return nil

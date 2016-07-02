@@ -29,10 +29,9 @@ import (
 	"strings"
 	"time"
 
-	ipfs_config "github.com/ipfs/go-ipfs/repo/config"
-
 	"github.com/apiarian/go-ipgs/cache"
 	"github.com/apiarian/go-ipgs/cachedshell"
+	"github.com/apiarian/go-ipgs/ipgs/common"
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
 	"github.com/apiarian/go-ipgs/util"
@@ -69,7 +68,7 @@ to quickly create a Cobra application.`,
 		err = viper.Unmarshal(&cfg)
 		util.FatalIfErr("unmarshal config", err)
 
-		s, err := makeIpfsShell(cfg, c)
+		s, err := common.MakeIpfsShell(cfg, c)
 		util.FatalIfErr("make IPFS shell", err)
 
 		id, err := s.ID()
@@ -80,7 +79,7 @@ to quickly create a Cobra application.`,
 		st, err := loadLatestState(nodeDir, cfg, s)
 		util.FatalIfErr("load latest state", err)
 
-		st.LastUpdated = time.Now()
+		st.LastUpdated = state.IPGSTime{time.Now()}
 
 		err = st.Publish(nodeDir, cfg, s)
 		util.FatalIfErr("publish state", err)
@@ -100,32 +99,6 @@ func init() {
 	// is called directly, e.g.:
 	// daemonCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
-}
-
-func makeIpfsShell(c config.Config, ca *cache.Cache) (*cachedshell.CachedShell, error) {
-	fn, err := ipfs_config.Filename(c.IPFS.Path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build IPFS config filename: %s", err)
-	}
-
-	cBytes, err := ioutil.ReadFile(fn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read IPFS config file: %s", err)
-	}
-
-	var ipfsCfg ipfs_config.Config
-	err = json.Unmarshal(cBytes, &ipfsCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal IPFS config json: %s", err)
-	}
-
-	s := cachedshell.NewCachedShell(ipfsCfg.Addresses.API, ca)
-	_, err = s.ID()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get ID from IPFS node: %s", err)
-	}
-
-	return s, nil
 }
 
 func loadLatestState(
@@ -166,11 +139,63 @@ func loadLatestState(
 	}
 
 	var curSt *state.State
-	if ipfsSt.LastUpdated.After(fsSt.LastUpdated) {
+	if ipfsSt.LastUpdated.After(fsSt.LastUpdated.Time) {
 		log.Println("IPFS state is more fresh than the filesystem one")
+
+		plObject, err := s.ObjectGet(fmt.Sprintf("%s/interplanetary-game-system/players", ipnsHash))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the players object: %s", err)
+		}
+
+		for _, pl := range plObject.Links {
+			pObj, err := s.ObjectGet(pl.Hash)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get player object: %s", err)
+			}
+
+			var p *state.Player
+			err = json.Unmarshal([]byte(pObj.Data), &p)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal player JSON: %s", err)
+			}
+
+			for _, l := range pObj.Links {
+				switch l.Name {
+				case "player-public-key":
+					p.PublicKeyHash = l.Hash
+				case "previous-version":
+					p.PreviousVersionHash = l.Hash
+				}
+			}
+
+			ipfsSt.Players = append(ipfsSt.Players, p)
+		}
+
 		curSt = ipfsSt
 	} else {
 		log.Println("filesystem state is at least as fresh as the IPFS one")
+
+		plDir := filepath.Join(stDir, "players")
+		pfiles, err := ioutil.ReadDir(plDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read the players directory: %s", err)
+		}
+
+		for _, pf := range pfiles {
+			pb, err := ioutil.ReadFile(filepath.Join(plDir, pf.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("faild to read player file: %s", err)
+			}
+
+			var p *state.Player
+			err = json.Unmarshal(pb, &p)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal player JSON: %s", err)
+			}
+
+			fsSt.Players = append(fsSt.Players, p)
+		}
+
 		curSt = fsSt
 	}
 

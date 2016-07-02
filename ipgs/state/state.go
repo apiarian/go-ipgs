@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,12 +14,25 @@ import (
 	"github.com/apiarian/go-ipgs/ipgs/config"
 )
 
+// IPGSTime wraps around time.Time for consistent text formatting
+type IPGSTime struct {
+	time.Time
+}
+
+// MarshalJSON cretes a UTC RFC-3339 representation of the time.Time embedded
+// within IPGSTime
+func (t IPGSTime) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + t.UTC().Format(time.RFC3339) + `"`), nil
+}
+
 // State describes the state of IPGS node
 type State struct {
 	// Identity is the path to the identity.asc file for the user
 	Identity string
-	// The time when this node was last updated
-	LastUpdated time.Time
+	// LastUpdated is the time when this node was last updated
+	LastUpdated IPGSTime
+	// Players is a list of Player tracking objects
+	Players []*Player
 }
 
 // LastUpdatedForOutput formats the LastUpdated timestamp into a string for
@@ -36,7 +50,7 @@ func (st *State) LastUpdatedFromInput(s string) error {
 		return fmt.Errorf("could not parse string '%s': %s", s, err)
 	}
 
-	st.LastUpdated = t
+	st.LastUpdated = IPGSTime{t}
 
 	return nil
 }
@@ -70,6 +84,26 @@ func (st *State) Publish(
 		return fmt.Errorf("failed to write temporary last-updated file: %s", err)
 	}
 
+	plDir := filepath.Join(fsStTmp, "players")
+	err = os.Mkdir(plDir, 0700)
+	if err != nil {
+		return fmt.Errorf("failed to create %s: %s", plDir, err)
+	}
+	for _, p := range st.Players {
+		j, err := json.MarshalIndent(p, "", "\t")
+		if err != nil {
+			return fmt.Errorf("failed to marshal player JSON: %s", err)
+		}
+		err = ioutil.WriteFile(
+			filepath.Join(plDir, fmt.Sprintf("%s.json", p.PublicKeyHash)),
+			j,
+			0644,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to write player file: %s", err)
+		}
+	}
+
 	fsSt := filepath.Join(nodeDir, "state")
 	err = os.RemoveAll(fsSt)
 	if err != nil {
@@ -85,6 +119,22 @@ func (st *State) Publish(
 		return fmt.Errorf("failed to add identity file: %s", err)
 	}
 
+	plHash, err := s.NewObject("")
+	if err != nil {
+		return fmt.Errorf("failed to create players object: %s", err)
+	}
+	for _, p := range st.Players {
+		pHash, err := p.CreateIPFSObject(s, identHash)
+		if err != nil {
+			return fmt.Errorf("failed to create player object: %s", err)
+		}
+
+		plHash, err = s.PatchLink(plHash, p.PublicKeyHash, pHash, false)
+		if err != nil {
+			return fmt.Errorf("failed to add player link to players: %s", err)
+		}
+	}
+
 	stHash, err := s.NewObject("")
 	if err != nil {
 		return fmt.Errorf("failed to create state object: %s", err)
@@ -97,6 +147,11 @@ func (st *State) Publish(
 	stHash, err = s.PatchLink(stHash, "identity.asc", identHash, false)
 	if err != nil {
 		return fmt.Errorf("failed to add identity.asc to state: %s", err)
+	}
+
+	stHash, err = s.PatchLink(stHash, "players", plHash, false)
+	if err != nil {
+		return fmt.Errorf("failed to add players to state: %s", err)
 	}
 
 	curObjHash, err := s.Resolve("")
