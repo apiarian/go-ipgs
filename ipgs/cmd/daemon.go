@@ -25,9 +25,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/apiarian/go-ipgs/cache"
 	"github.com/apiarian/go-ipgs/cachedshell"
@@ -76,13 +77,28 @@ to quickly create a Cobra application.`,
 
 		log.Println("connected to IPFS node", id.ID)
 
-		st, err := loadLatestState(nodeDir, cfg, s)
+		var (
+			st *state.State
+			mx *sync.Mutex
+		)
+		st, err = loadLatestState(nodeDir, cfg, s)
 		util.FatalIfErr("load latest state", err)
 
-		st.LastUpdated = state.IPGSTime{time.Now()}
+		mx = &sync.Mutex{}
 
-		err = st.Publish(nodeDir, cfg, s)
-		util.FatalIfErr("publish state", err)
+		http.HandleFunc(
+			"/players/",
+			state.MakePlayersHandlerFunc(cfg, s, st, mx),
+		)
+
+		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
+		log.Println("HTTP API starting at", addr)
+		log.Fatal(http.ListenAndServe(addr, nil))
+
+		// st.LastUpdated = state.IPGSTime{time.Now()}
+
+		// err = st.Publish(nodeDir, cfg, s)
+		// util.FatalIfErr("publish state", err)
 	},
 }
 

@@ -49,6 +49,9 @@ type IpgsConfig struct {
 	// UnpinIPNS can be set to true to unpin the previous IPNS object when
 	// publishing a new state congiguration
 	UnpinIPNS bool
+	// APIPort is the port on localhost where the IPGS API will listen for HTTP
+	// requests
+	APIPort int
 }
 
 // Save marshals the config into a proper JSON file in th nodeDir provided

@@ -432,6 +432,7 @@ func writeIdentityFile(nodeDir string, gpgCfg config.GpgConfig) (string, error) 
 func getIpgsConfig() (config.IpgsConfig, error) {
 	c := config.IpgsConfig{
 		UnpinIPNS: true,
+		APIPort:   9090,
 	}
 
 	reallyUnpin, err := util.GetBoolForPrompt(
@@ -442,6 +443,15 @@ func getIpgsConfig() (config.IpgsConfig, error) {
 		return c, fmt.Errorf("failed to get IPNS overwrite confirmation from user: %s", err)
 	}
 	c.UnpinIPNS = reallyUnpin
+
+	requestedPort, err := util.GetIntForPrompt(
+		"port on which to listen for HTTP API requests",
+		c.APIPort,
+	)
+	if err != nil {
+		return c, fmt.Errorf("failed to get IPGS API port from user: %s", err)
+	}
+	c.APIPort = requestedPort
 
 	return c, nil
 }

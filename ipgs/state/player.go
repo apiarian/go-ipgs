@@ -3,8 +3,15 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"regexp"
+	"sync"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
+	"github.com/apiarian/go-ipgs/ipgs/config"
 )
 
 // Player describes the state of an IPGS player
@@ -84,4 +91,104 @@ func (p *Player) CreateIPFSObject(s *cachedshell.CachedShell, identHash string) 
 	}
 
 	return pHash, nil
+}
+
+var PlayersUrlRe = regexp.MustCompile(`^/players/([0-9A-Za-z]*)[/]?$`)
+
+type playersPOSTformat struct {
+	Nodes []string
+}
+
+func MakePlayersHandlerFunc(
+	c config.Config,
+	s *cachedshell.CachedShell,
+	st *State,
+	mx *sync.Mutex,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mx.Lock()
+		defer mx.Unlock()
+
+		sm := PlayersUrlRe.FindStringSubmatch(r.URL.Path)
+		if len(sm) == 0 {
+			http.Error(
+				w,
+				"available endpoints: /players/, /players/:player-id",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		playerID := sm[1]
+
+		pl := st.Players
+
+		if playerID == "" {
+			switch r.Method {
+			case http.MethodGet:
+				j, err := json.MarshalIndent(pl, "", "\t")
+				if err != nil {
+					log.Println("failed to marshal players to JSON:", err)
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.Write(j)
+				w.Write([]byte("\n"))
+
+			case http.MethodPost:
+				body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
+				if err != nil {
+					log.Println("failed to read /players/ POST body:", err)
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				if err = r.Body.Close(); err != nil {
+					log.Println("failed to close /players/ POST body:", err)
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+
+				var postedPlayers playersPOSTformat
+				err = json.Unmarshal(body, &postedPlayers)
+				if err != nil || len(postedPlayers.Nodes) == 0 {
+					http.Error(
+						w,
+						"invalid data format; sample format:\n",
+						http.StatusBadRequest,
+					)
+					err = json.NewEncoder(w).Encode(
+						playersPOSTformat{
+							Nodes: []string{
+								pl[0].Nodes[0],
+								"other-node-ids",
+							},
+						},
+					)
+					if err != nil {
+						log.Println("failed to marshal sample /players/ POST struct: %s", err)
+					}
+					w.Write([]byte("\n"))
+				}
+
+				for _, pn := range postedPlayers.Nodes {
+					log.Println("going to look for player data at node", pn)
+				}
+
+				http.Error(w, "players POST still not fully implemented", http.StatusNotImplemented)
+				return
+
+			default:
+				log.Printf("got request to %s on /players/", r.Method)
+				http.Error(
+					w,
+					"available methods: GET, POST",
+					http.StatusNotImplemented,
+				)
+				return
+			}
+		} else {
+			fmt.Fprintf(w, "looking for player %s in %+v", playerID, pl)
+		}
+	}
 }

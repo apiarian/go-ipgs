@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"golang.org/x/crypto/openpgp"
 )
@@ -37,7 +38,7 @@ func GetStringForPrompt(prompt, def string) (string, error) {
 	return t, nil
 }
 
-// GetBoolForPrompt writes a prompt to STDOUT and expects a "y" or a "no" in
+// GetBoolForPrompt writes a prompt to STDOUT and expects a "y" or a "n" in
 // response. Returns true if "y" was entered, otherwise returns false.
 func GetBoolForPrompt(prompt string, def bool) (bool, error) {
 	var ds string
@@ -55,6 +56,27 @@ func GetBoolForPrompt(prompt string, def bool) (bool, error) {
 		return true, err
 	}
 	return false, err
+}
+
+// GetIntForPromt writes a prompt to STDOUT and expects an integer in response.
+// Returns the input converted to an integer if possible, or an error if not.
+func GetIntForPrompt(prompt string, def int) (int, error) {
+	ds := strconv.Itoa(def)
+
+	s, err := GetStringForPrompt(
+		prompt,
+		ds,
+	)
+	if err != nil {
+		return def, err
+	}
+
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		return def, fmt.Errorf("failed to parse string input to integer: %s", err)
+	}
+
+	return i, nil
 }
 
 // GetPublicPrivateRings returns the public and private keyrings from the
