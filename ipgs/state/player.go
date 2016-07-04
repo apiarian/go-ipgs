@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/apiarian/go-ipgs/ipgs/config"
@@ -100,6 +101,7 @@ type playersPOSTformat struct {
 }
 
 func MakePlayersHandlerFunc(
+	nodeDir string,
 	c config.Config,
 	s *cachedshell.CachedShell,
 	st *State,
@@ -160,7 +162,7 @@ func MakePlayersHandlerFunc(
 					err = json.NewEncoder(w).Encode(
 						playersPOSTformat{
 							Nodes: []string{
-								pl[0].Nodes[0],
+								pl[st.IdentityHash].Nodes[0],
 								"other-node-ids",
 							},
 						},
@@ -172,12 +174,68 @@ func MakePlayersHandlerFunc(
 				}
 
 				for _, pn := range postedPlayers.Nodes {
-					log.Println("going to look for player data at node", pn)
+					ipnsHash, err := s.Resolve(fmt.Sprintf("/ipns/%s", pn))
+					if err != nil {
+						log.Println("failed to resolve provided node IPNS:", err)
+						http.Error(
+							w,
+							fmt.Sprintf("could not resolve node %s", pn),
+							http.StatusNotFound,
+						)
+						return
+					}
+
+					stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
+					if err != nil {
+						log.Println("failed to find ipgs object on node:", err)
+						http.Error(
+							w,
+							fmt.Sprintf("could not find interplanetary-game-system object for node %s", pn),
+							http.StatusNotFound,
+						)
+						return
+					}
+
+					remoteSt, err := LoadFromHash(stHash, s)
+					if err != nil {
+						log.Println("failed to load ipgs object on node:", err)
+						http.Error(
+							w,
+							fmt.Sprintf("could not load IPGS state for node %s", pn),
+							http.StatusInternalServerError,
+						)
+						return
+					}
+
+					p, ok := remoteSt.Players[remoteSt.IdentityHash]
+					if !ok {
+						log.Println("could not find the playser's object at their node")
+						http.Error(
+							w,
+							fmt.Sprintf("could not find player's object for node %s", pn),
+							http.StatusInternalServerError,
+						)
+						return
+					}
+
+					st.Players[p.PublicKeyHash] = p
+					st.LastUpdated = IPGSTime{time.Now()}
 				}
 
-				http.Error(w, "players POST still not fully implemented", http.StatusNotImplemented)
-				return
+				err = st.Publish(nodeDir, c, s)
+				if err != nil {
+					log.Println("failed to publish updated state", err)
+					http.Error(
+						w,
+						"could not publish updated state",
+						http.StatusInternalServerError,
+					)
+					return
+				}
 
+				w.WriteHeader(http.StatusCreated)
+
+				return
 			default:
 				log.Printf("got request to %s on /players/", r.Method)
 				http.Error(

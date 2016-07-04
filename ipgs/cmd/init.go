@@ -253,6 +253,8 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 		privateKeyFile.Close()
 		cmd := exec.Command(
 			gpgPath,
+			"--homedir",
+			c.Home,
 			"--import",
 			privateKeyFile.Name(),
 		)
@@ -387,11 +389,10 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 		Nodes:               nodes,
 	}
 
-	st := state.State{
-		Identity:    idFilename,
-		LastUpdated: state.IPGSTime{time.Now()},
-		Players:     []*state.Player{player},
-	}
+	st := state.NewState()
+	st.IdentityFile = idFilename
+	st.LastUpdated = state.IPGSTime{time.Now()}
+	st.Players[player.PublicKeyHash] = player
 
 	err = st.Publish(nodeDir, cfg, s)
 	if err != nil {

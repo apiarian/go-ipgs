@@ -88,7 +88,7 @@ to quickly create a Cobra application.`,
 
 		http.HandleFunc(
 			"/players/",
-			state.MakePlayersHandlerFunc(cfg, s, st, mx),
+			state.MakePlayersHandlerFunc(nodeDir, cfg, s, st, mx),
 		)
 
 		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
@@ -124,7 +124,7 @@ func loadLatestState(
 ) (*state.State, error) {
 	stDir := filepath.Join(nodeDir, "state")
 
-	fsSt := &state.State{}
+	fsSt := state.NewState()
 
 	fsLastUpdated, err := ioutil.ReadFile(filepath.Join(stDir, "last-updated"))
 	if err != nil {
@@ -135,57 +135,28 @@ func loadLatestState(
 		return nil, fmt.Errorf("failed to process last-updated from file: %s", err)
 	}
 
-	ipfsSt := &state.State{}
+	var ipfsSt *state.State
+
 	ipnsHash, err := s.Resolve("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve nodes's IPNS: %s", err)
 	}
 
-	stObject, err := s.ObjectGet(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
+	stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
 	if err != nil {
 		if !strings.Contains(err.Error(), `no link named "interplanetary-game-system"`) {
 			return nil, fmt.Errorf("failed to request IPGS state under IPNS: %s", err)
 		}
 	} else {
-		log.Println("found state under IPNS base", ipnsHash)
-		err = ipfsSt.LastUpdatedFromInput(stObject.Data)
+		ipfsSt, err = state.LoadFromHash(stHash, s)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process last-updated from IPFS object: %s", err)
+			return nil, fmt.Errorf("failed to load state from IPFS: %s", err)
 		}
 	}
 
 	var curSt *state.State
 	if ipfsSt.LastUpdated.After(fsSt.LastUpdated.Time) {
 		log.Println("IPFS state is more fresh than the filesystem one")
-
-		plObject, err := s.ObjectGet(fmt.Sprintf("%s/interplanetary-game-system/players", ipnsHash))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get the players object: %s", err)
-		}
-
-		for _, pl := range plObject.Links {
-			pObj, err := s.ObjectGet(pl.Hash)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get player object: %s", err)
-			}
-
-			var p *state.Player
-			err = json.Unmarshal([]byte(pObj.Data), &p)
-			if err != nil {
-				return nil, fmt.Errorf("failed to unmarshal player JSON: %s", err)
-			}
-
-			for _, l := range pObj.Links {
-				switch l.Name {
-				case "player-public-key":
-					p.PublicKeyHash = l.Hash
-				case "previous-version":
-					p.PreviousVersionHash = l.Hash
-				}
-			}
-
-			ipfsSt.Players = append(ipfsSt.Players, p)
-		}
 
 		curSt = ipfsSt
 	} else {
@@ -209,13 +180,13 @@ func loadLatestState(
 				return nil, fmt.Errorf("failed to unmarshal player JSON: %s", err)
 			}
 
-			fsSt.Players = append(fsSt.Players, p)
+			fsSt.Players[p.PublicKeyHash] = p
 		}
 
 		curSt = fsSt
 	}
 
-	curSt.Identity = filepath.Join(nodeDir, "identity.asc")
+	curSt.IdentityFile = filepath.Join(nodeDir, "identity.asc")
 
 	return curSt, nil
 }

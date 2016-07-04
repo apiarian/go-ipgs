@@ -27,12 +27,20 @@ func (t IPGSTime) MarshalJSON() ([]byte, error) {
 
 // State describes the state of IPGS node
 type State struct {
-	// Identity is the path to the identity.asc file for the user
-	Identity string
+	// IdentityFile is the path to the identity.asc file for the user
+	IdentityFile string
+	// IdentityHash is the IPFS hash of the identity.asc file for the user
+	IdentityHash string
 	// LastUpdated is the time when this node was last updated
 	LastUpdated IPGSTime
-	// Players is a list of Player tracking objects
-	Players []*Player
+	// Players is a map of Player tracking objects keyed by their public key hash
+	Players map[string]*Player
+}
+
+func NewState() *State {
+	return &State{
+		Players: make(map[string]*Player),
+	}
 }
 
 // LastUpdatedForOutput formats the LastUpdated timestamp into a string for
@@ -53,6 +61,89 @@ func (st *State) LastUpdatedFromInput(s string) error {
 	st.LastUpdated = IPGSTime{t}
 
 	return nil
+}
+
+// LoadFromHash loads a *State from an IPFS hash. This hash should be the value
+// of an /ipns/:node-id/interplanetary-game-system link.
+func LoadFromHash(
+	h string,
+	s *cachedshell.CachedShell,
+) (*State, error) {
+	st := NewState()
+
+	sObj, err := s.ObjectGet(h)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object at %s: %s", h, err)
+	}
+
+	err = st.LastUpdatedFromInput(sObj.Data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read last updated from %s: %s", h, err)
+	}
+
+	for _, l := range sObj.Links {
+		switch l.Name {
+		case "identity.asc":
+			st.IdentityHash = l.Hash
+		case "players":
+			pl, err := loadPlayersFromHash(l.Hash, s)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load players at %s: %s", l.Hash, err)
+			}
+			st.Players = pl
+		}
+	}
+
+	return st, nil
+}
+
+func loadPlayersFromHash(h string, s *cachedshell.CachedShell) (map[string]*Player, error) {
+	pl := make(map[string]*Player)
+
+	plObj, err := s.ObjectGet(h)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get players object at %s: %s", h, err)
+	}
+
+	for _, l := range plObj.Links {
+		p, err := loadPlayerFromHash(l.Hash, s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load player at %s: %s", l.Hash, err)
+		}
+
+		if p.PublicKeyHash == "" {
+			return nil, fmt.Errorf("player created from %s has an empty public key hash", l.Hash)
+		}
+
+		pl[p.PublicKeyHash] = p
+	}
+
+	return pl, nil
+}
+
+func loadPlayerFromHash(h string, s *cachedshell.CachedShell) (*Player, error) {
+	var p *Player
+
+	pObj, err := s.ObjectGet(h)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get player object at %s: %s", h, err)
+	}
+
+	err = json.Unmarshal([]byte(pObj.Data), &p)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal player JSON at %s: %s", h, err)
+	}
+
+	for _, l := range pObj.Links {
+		switch l.Name {
+		case "player-public-key":
+			p.PublicKeyHash = l.Hash
+		case "previous-version":
+			p.PreviousVersionHash = l.Hash
+		}
+	}
+
+	return p, nil
 }
 
 // Publish safely saves the state to the node directory and to IPFS. It writes
@@ -114,10 +205,11 @@ func (st *State) Publish(
 		return fmt.Errorf("failed to rename %s to %s: %s", fsStTmp, fsSt, err)
 	}
 
-	identHash, err := s.AddPermanentFile(st.Identity)
+	identHash, err := s.AddPermanentFile(st.IdentityFile)
 	if err != nil {
 		return fmt.Errorf("failed to add identity file: %s", err)
 	}
+	st.IdentityHash = identHash
 
 	plHash, err := s.NewObject("")
 	if err != nil {
