@@ -150,8 +150,13 @@ func getCleanNodeDir(nodeDir string) (string, error) {
 }
 
 func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
+	gpghome, ok := os.LookupEnv("GNUPGHOME")
+	if !ok {
+		gpghome = os.ExpandEnv("$HOME/.gnupg/")
+	}
+
 	c := config.GpgConfig{
-		Home:       os.ExpandEnv("$HOME/.gnupg/"),
+		Home:       gpghome,
 		ShortKeyID: "",
 	}
 
