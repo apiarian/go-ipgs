@@ -37,6 +37,7 @@ import (
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
 	"github.com/apiarian/go-ipgs/util"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
 	ipfs_config "github.com/ipfs/go-ipfs/repo/config"
@@ -101,7 +102,7 @@ func getCleanNodeDir(nodeDir string) (string, error) {
 
 	dir, err := util.GetStringForPrompt("IPGS node directory", nodeDir)
 	if err != nil {
-		return nodeDir, fmt.Errorf("failed to read node directory location: %s", err)
+		return nodeDir, errors.Wrap(err, "failed to read directory node location")
 	}
 	if dir != nodeDir {
 		log.Printf("you will need to use the '--node %s' flag for future invocations\n", dir)
@@ -110,14 +111,14 @@ func getCleanNodeDir(nodeDir string) (string, error) {
 
 	nodeDirStats, err := os.Stat(nodeDir)
 	if err != nil && !os.IsNotExist(err) {
-		return nodeDir, fmt.Errorf("could not get stats on %s: %s", nodeDir, err)
+		return nodeDir, errors.Wrapf(err, "could not get stats on %s", nodeDir)
 	}
 
 	if !os.IsNotExist(err) {
 		// if nodeDir does actually exist...
 
 		if !nodeDirStats.IsDir() {
-			return nodeDir, fmt.Errorf(
+			return nodeDir, errors.Errorf(
 				"there is a non-directory already at %s, please delete it or choose a different location for the IPGS node directory",
 				nodeDir,
 			)
@@ -128,22 +129,22 @@ func getCleanNodeDir(nodeDir string) (string, error) {
 			false,
 		)
 		if err != nil {
-			return nodeDir, fmt.Errorf("failed to read deletion confirmation: %s", err)
+			return nodeDir, errors.Wrap(err, "failed to read deletion confirmation")
 		}
 
 		if !reallyWipe {
-			return nodeDir, fmt.Errorf("deletion of existing directory forbidden by user")
+			return nodeDir, errors.Errorf("deletion of existing directory forbidden by user")
 		}
 
 		err = os.RemoveAll(nodeDir)
 		if err != nil {
-			return nodeDir, fmt.Errorf("could not delete %s: %s", nodeDir, err)
+			return nodeDir, errors.Wrapf(err, "could not delete %s", nodeDir)
 		}
 	}
 
 	err = os.MkdirAll(nodeDir, 0750)
 	if err != nil {
-		return nodeDir, fmt.Errorf("could not create IPGS node directory: %s", err)
+		return nodeDir, errors.Wrap(err, "could not create IPGS node directory")
 	}
 
 	return nodeDir, nil
@@ -165,19 +166,19 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 		c.Home,
 	)
 	if err != nil {
-		return c, fmt.Errorf("failed to get GPG home directory input: %s", err)
+		return c, errors.Wrap(err, "failed to get GPG home directory input")
 	}
 	c.Home = newHome
 
 	needNewKeys, err := util.GetBoolForPrompt("create new OpenPGP keypair for this node?", true)
 	if err != nil {
-		return c, fmt.Errorf("failed to read OpenPGP keypair creation confirmation: %s", err)
+		return c, errors.Wrap(err, "failed to read OpenPGP keypair creation confirmation")
 	}
 
 	if needNewKeys {
 		gpgPath, err := exec.LookPath("gpg")
 		if err != nil {
-			return c, fmt.Errorf("IPGS depends on the gpg keychain for key storage; failed to find gpg in the search path: %s", err)
+			return c, errors.Wrap(err, "IPGS depends on the gpg keychain for key storage; failed to find gpg in the search path")
 		}
 
 		gpgOk, err := util.GetBoolForPrompt(
@@ -185,10 +186,10 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 			true,
 		)
 		if err != nil {
-			return c, fmt.Errorf("failed to get gpg path confirmation: %s", err)
+			return c, errors.Wrap(err, "failed to get gpg path confirmation")
 		}
 		if !gpgOk {
-			return c, fmt.Errorf("please make sure that the correct gpg executable is topmost in your search path")
+			return c, errors.Errorf("please make sure that the correct gpg executable is topmost in your search path")
 		}
 
 		name, err := util.GetStringForPrompt(
@@ -196,14 +197,14 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 			"",
 		)
 		if err != nil {
-			return c, fmt.Errorf("failed to get OpenPGP Entity Name: %s", err)
+			return c, errors.Wrap(err, "failed to get OpenPGP Entity Name")
 		}
 		comment, err := util.GetStringForPrompt(
 			"OpenPGP Entity Comment",
 			"IPGS Player Identity",
 		)
 		if err != nil {
-			return c, fmt.Errorf("failed to get OpenPGP Entity Comment: %s", err)
+			return c, errors.Wrap(err, "failed to get OpenPGP Entity Comment")
 		}
 		email, err := util.GetStringForPrompt(
 			"OpenPGP Entity Email",
@@ -218,12 +219,12 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 			),
 		)
 		if err != nil {
-			return c, fmt.Errorf("failed to get OpenPGP Entity Email: %s", err)
+			return c, errors.Wrap(err, "failed to get OpenPGP Entity Email")
 		}
 
 		entity, err := openpgp.NewEntity(name, comment, email, nil)
 		if err != nil {
-			return c, fmt.Errorf("failed to create new OpenPGP entity: %s", err)
+			return c, errors.Wrap(err, "failed to create new OpenPGP entity")
 		}
 		c.ShortKeyID = entity.PrimaryKey.KeyIdShortString()
 		log.Println("created key", c.ShortKeyID)
@@ -236,22 +237,22 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 				nil,
 			)
 			if err != nil {
-				return c, fmt.Errorf("failed to self-sign identity: %s", err)
+				return c, errors.Wrap(err, "failed to self-sign identity")
 			}
 		}
 
 		privateKeyFile, err := os.Create(filepath.Join(nodeDir, "private.asc"))
 		if err != nil {
-			return c, fmt.Errorf("failed to create private key file: %s", err)
+			return c, errors.Wrap(err, "failed to create private key file")
 		}
 		defer privateKeyFile.Close()
 		err = privateKeyFile.Chmod(0400)
 		if err != nil {
-			return c, fmt.Errorf("failed to set the private key file to read-only: %s", err)
+			return c, errors.Wrap(err, "failed to set the private key file to read-only")
 		}
 		privateEncoder, err := armor.Encode(privateKeyFile, openpgp.PrivateKeyType, nil)
 		if err != nil {
-			return c, fmt.Errorf("failed to create armorer for private key: %s", err)
+			return c, errors.Wrap(err, "failed to create armorer for private key")
 		}
 		entity.SerializePrivate(privateEncoder, nil)
 		privateEncoder.Close()
@@ -265,7 +266,7 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 		)
 		o, err := cmd.CombinedOutput()
 		if err != nil {
-			return c, fmt.Errorf("failed to get the combined output from gpg command: %s", err)
+			return c, errors.Wrap(err, "failed to get the combined output from gpg command")
 		} else {
 			log.Printf("captured the following data from gpg:\n\n%s\n", string(o))
 		}
@@ -298,7 +299,7 @@ func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
 			c.ShortKeyID,
 		)
 		if err != nil {
-			return c, fmt.Errorf("failed to get the OpenPGP Short Key ID: %s", err)
+			return c, errors.Wrap(err, "failed to get the OpenPGP Short Key ID")
 		}
 	}
 
@@ -322,7 +323,7 @@ func getIpfsConfig() (config.IpfsConfig, error) {
 		c.Path,
 	)
 	if err != nil {
-		return c, fmt.Errorf("failed to get new IPFS path from user: %s", err)
+		return c, errors.Wrap(err, "failed to get new IPFS path from user")
 	}
 	c.Path = userPath
 
@@ -340,27 +341,27 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 	// copying and moving it around when we do our state dance
 	idFilename, err := writeIdentityFile(nodeDir, cfg.GPG)
 	if err != nil {
-		return fmt.Errorf("could not write identity file: %s", err)
+		return errors.Wrap(err, "could not write identity file")
 	}
 
 	c := cache.NewCache()
 	s, err := common.MakeIpfsShell(cfg, c)
 	if err != nil {
-		return fmt.Errorf("could not create IPFS shell: %s", err)
+		return errors.Wrap(err, "could not create IPFS shell")
 	}
 
 	pubKeyHash, err := s.AddPermanentFile(idFilename)
 	if err != nil {
-		return fmt.Errorf("could not add identity.asc permanently: %s", err)
+		return errors.Wrap(err, "could not add identity.asc permanently")
 	}
 
 	_, prvRing, err := util.GetPublicPrivateRings(cfg.GPG.Home)
 	if err != nil {
-		return fmt.Errorf("could not load private keyring: %s", err)
+		return errors.Wrap(err, "could not load private keyring")
 	}
 	entity, err := util.FindEntityForKeyId(prvRing, cfg.GPG.ShortKeyID)
 	if err != nil {
-		return fmt.Errorf("could not find the node's identity: %s", err)
+		return errors.Wrap(err, "could not find the node's identity")
 	}
 	var n string
 	for _, v := range entity.Identities {
@@ -373,12 +374,12 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 		n,
 	)
 	if err != nil {
-		return fmt.Errorf("could not get player name from user: %s", err)
+		return errors.Errorf("could not get player name from user")
 	}
 
 	nodeId, err := s.ID()
 	if err != nil {
-		return fmt.Errorf("failed to read ID from IPFS node: %s", err)
+		return errors.Wrap(err, "failed to read ID from IPFS node")
 	}
 	nodesStr, err := util.GetStringForPrompt(
 		"IPFS backing nodes (comma separated list of IDs)",
@@ -401,7 +402,7 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 
 	err = st.Publish(nodeDir, cfg, s)
 	if err != nil {
-		return fmt.Errorf("could not publish initial state: %s", err)
+		return errors.Wrap(err, "could not publish initial state")
 	}
 
 	return nil
@@ -410,23 +411,23 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 func writeIdentityFile(nodeDir string, gpgCfg config.GpgConfig) (string, error) {
 	_, prvRing, err := util.GetPublicPrivateRings(gpgCfg.Home)
 	if err != nil {
-		return "", fmt.Errorf("failed to load private keyring: %s", err)
+		return "", errors.Wrap(err, "failed to load private keyring")
 	}
 
 	entity, err := util.FindEntityForKeyId(prvRing, gpgCfg.ShortKeyID)
 	if err != nil {
-		return "", fmt.Errorf("failed to find the node's entity: %s", err)
+		return "", errors.Wrap(err, "failed to find the node's entity")
 	}
 
 	pubKeyFile, err := os.Create(filepath.Join(nodeDir, "identity.asc"))
 	if err != nil {
-		return "", fmt.Errorf("failed to create public key file: %s", err)
+		return "", errors.Wrap(err, "failed to create public key file")
 	}
 	defer pubKeyFile.Close()
 
 	pubEncoder, err := armor.Encode(pubKeyFile, openpgp.PublicKeyType, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create armorer for the public key: %s", err)
+		return "", errors.Wrap(err, "failed to create armorer for the public key")
 	}
 	defer pubEncoder.Close()
 
@@ -446,7 +447,7 @@ func getIpgsConfig() (config.IpgsConfig, error) {
 		c.UnpinIPNS,
 	)
 	if err != nil {
-		return c, fmt.Errorf("failed to get IPNS overwrite confirmation from user: %s", err)
+		return c, errors.Wrap(err, "failed to get IPNS overwrite confirmation from user")
 	}
 	c.UnpinIPNS = reallyUnpin
 
@@ -455,7 +456,7 @@ func getIpgsConfig() (config.IpgsConfig, error) {
 		c.APIPort,
 	)
 	if err != nil {
-		return c, fmt.Errorf("failed to get IPGS API port from user: %s", err)
+		return c, errors.Wrap(err, "failed to get IPGS API port from user")
 	}
 	c.APIPort = requestedPort
 

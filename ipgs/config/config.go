@@ -3,9 +3,10 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/pkg/errors"
 )
 
 // Config describes the configuration for an IPGS node. It contains various
@@ -58,12 +59,12 @@ type IpgsConfig struct {
 func (c Config) Save(nodeDir string) error {
 	cJSON, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
-		return fmt.Errorf("failed to marshal config into json: %s", err)
+		return errors.Wrap(err, "failed to marshal config into json")
 	}
 
 	cFile, err := os.Create(filepath.Join(nodeDir, "config.json"))
 	if err != nil {
-		return fmt.Errorf("failed to create config file: %s", err)
+		return errors.Wrap(err, "failed to create config file")
 	}
 	defer cFile.Close()
 

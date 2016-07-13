@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/pkg/errors"
 	"golang.org/x/crypto/openpgp"
 )
 
@@ -28,7 +29,7 @@ func GetStringForPrompt(prompt, def string) (string, error) {
 	inputScanner.Scan()
 	err := inputScanner.Err()
 	if err != nil {
-		return def, fmt.Errorf("failed to read from STDIN: %s", err)
+		return def, errors.Wrap(err, "failed to read from STDIN")
 	}
 
 	t := inputScanner.Text()
@@ -73,7 +74,7 @@ func GetIntForPrompt(prompt string, def int) (int, error) {
 
 	i, err := strconv.Atoi(s)
 	if err != nil {
-		return def, fmt.Errorf("failed to parse string input to integer: %s", err)
+		return def, errors.Wrap(err, "failed to parse string input to integer")
 	}
 
 	return i, nil
@@ -84,12 +85,12 @@ func GetIntForPrompt(prompt string, def int) (int, error) {
 func GetPublicPrivateRings(gpgHome string) (openpgp.EntityList, openpgp.EntityList, error) {
 	pubRing, err := getRingFromFile(filepath.Join(gpgHome, "pubring.gpg"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get public keyring: %s", err)
+		return nil, nil, errors.Wrap(err, "failed to get public keyring")
 	}
 
 	prvRing, err := getRingFromFile(filepath.Join(gpgHome, "secring.gpg"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get private keyring: %s", err)
+		return nil, nil, errors.Wrap(err, "failed to get private keyring")
 	}
 
 	return pubRing, prvRing, nil
@@ -98,13 +99,13 @@ func GetPublicPrivateRings(gpgHome string) (openpgp.EntityList, openpgp.EntityLi
 func getRingFromFile(filename string) (openpgp.EntityList, error) {
 	ringFile, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open keyring file: %s", err)
+		return nil, errors.Wrap(err, "failed to open keyring file")
 	}
 	defer ringFile.Close()
 
 	ring, err := openpgp.ReadKeyRing(ringFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read keyring file: %s", err)
+		return nil, errors.Wrap(err, "failed to read keyring file")
 	}
 
 	return ring, nil
@@ -122,7 +123,7 @@ func FindEntityForKeyId(ring openpgp.EntityList, id string) (*openpgp.Entity, er
 	}
 
 	if e == nil {
-		return nil, fmt.Errorf("could not find %s in the keyring", id)
+		return nil, errors.Errorf("could not find %s in the keyring", id)
 	}
 
 	return e, nil
@@ -136,13 +137,13 @@ func FindEntityForKeyId(ring openpgp.EntityList, id string) (*openpgp.Entity, er
 func ArmoredDetachedSignToFile(e *openpgp.Entity, m io.Reader, filename string) error {
 	f, err := os.Create(filename)
 	if err != nil {
-		return fmt.Errorf("failed to create signature file: %s", err)
+		return errors.Wrap(err, "failed to create signature file")
 	}
 	defer f.Close()
 
 	err = openpgp.ArmoredDetachSignText(f, e, m, nil)
 	if err != nil {
-		return fmt.Errorf("failed to make signer: %s", err)
+		return errors.Wrap(err, "failed to make signer")
 	}
 
 	return nil
@@ -152,6 +153,6 @@ func ArmoredDetachedSignToFile(e *openpgp.Entity, m io.Reader, filename string) 
 // message "failed to [note]: [err]"
 func FatalIfErr(note string, err error) {
 	if err != nil {
-		log.Fatalf("failed to %s: %s\n", note, err)
+		log.Fatalf("failed to %v: %+v\n", note, err)
 	}
 }

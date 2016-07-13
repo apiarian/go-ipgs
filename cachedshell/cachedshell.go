@@ -7,6 +7,7 @@ import (
 
 	shell "github.com/apiarian/go-ipfs-api"
 	"github.com/apiarian/go-ipgs/cache"
+	"github.com/pkg/errors"
 )
 
 // CachedShell embeds the go-ipfs-api shell with an extra *Cache
@@ -29,7 +30,7 @@ func (s *CachedShell) AddPermanentFile(filename string) (string, error) {
 
 	hash, err := s.Cache.ReadString(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to read %s from cache: %s", filename, err)
+		return "", errors.Wrapf(err, "failed to read %s from cache", filename)
 	}
 	if hash != "" {
 		return hash, nil
@@ -37,13 +38,13 @@ func (s *CachedShell) AddPermanentFile(filename string) (string, error) {
 
 	file, err := os.Open(filename)
 	if err != nil {
-		return "", fmt.Errorf("failed to open %s: %s", filename, err)
+		return "", errors.Wrapf(err, "failed to open %s", filename)
 	}
 	defer file.Close()
 
 	hash, err = s.Add(file)
 	if err != nil {
-		return "", fmt.Errorf("failed to add %s: %s", filename, err)
+		return "", errors.Wrapf(err, "failed to add %s", filename)
 	}
 
 	s.Cache.Write(key, hash)

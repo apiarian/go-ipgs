@@ -36,6 +36,7 @@ import (
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
 	"github.com/apiarian/go-ipgs/util"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -128,29 +129,30 @@ func loadLatestState(
 
 	fsLastUpdated, err := ioutil.ReadFile(filepath.Join(stDir, "last-updated"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read last-updated from file: %s", err)
+		return nil, errors.Wrap(err, "failed to read last-updated from file")
 	}
 	err = fsSt.LastUpdatedFromInput(string(fsLastUpdated))
 	if err != nil {
-		return nil, fmt.Errorf("failed to process last-updated from file: %s", err)
+		return nil, errors.Wrap(err, "failed to process last-updated from file")
 	}
 
 	var ipfsSt *state.State
 
 	ipnsHash, err := s.Resolve("")
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve nodes's IPNS: %s", err)
+		return nil, errors.Wrap(err, "failed to resolve nodes's IPNS")
 	}
 
 	stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
 	if err != nil {
+		// TODO: fix this to not use error text checking
 		if !strings.Contains(err.Error(), `no link named "interplanetary-game-system"`) {
-			return nil, fmt.Errorf("failed to request IPGS state under IPNS: %s", err)
+			return nil, errors.Wrap(err, "failed to request IPGS state under IPNS")
 		}
 	} else {
 		ipfsSt, err = state.LoadFromHash(stHash, s)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load state from IPFS: %s", err)
+			return nil, errors.Wrap(err, "failed to load state from IPFS")
 		}
 	}
 
@@ -165,19 +167,19 @@ func loadLatestState(
 		plDir := filepath.Join(stDir, "players")
 		pfiles, err := ioutil.ReadDir(plDir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read the players directory: %s", err)
+			return nil, errors.Wrap(err, "failed to read the players directory")
 		}
 
 		for _, pf := range pfiles {
 			pb, err := ioutil.ReadFile(filepath.Join(plDir, pf.Name()))
 			if err != nil {
-				return nil, fmt.Errorf("faild to read player file: %s", err)
+				return nil, errors.Wrap(err, "faild to read player file")
 			}
 
 			var p *state.Player
 			err = json.Unmarshal(pb, &p)
 			if err != nil {
-				return nil, fmt.Errorf("failed to unmarshal player JSON: %s", err)
+				return nil, errors.Wrap(err, "failed to unmarshal player JSON")
 			}
 
 			fsSt.Players[p.PublicKeyHash] = p

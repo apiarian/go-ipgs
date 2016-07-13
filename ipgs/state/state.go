@@ -12,6 +12,7 @@ import (
 
 	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/apiarian/go-ipgs/ipgs/config"
+	"github.com/pkg/errors"
 )
 
 // IPGSTime wraps around time.Time for consistent text formatting
@@ -55,7 +56,7 @@ func (st *State) LastUpdatedForOutput() string {
 func (st *State) LastUpdatedFromInput(s string) error {
 	t, err := time.ParseInLocation(time.RFC3339, s, nil)
 	if err != nil {
-		return fmt.Errorf("could not parse string '%s': %s", s, err)
+		return errors.Wrapf(err, "could not parse string '%s'", s)
 	}
 
 	st.LastUpdated = IPGSTime{t}
@@ -73,12 +74,12 @@ func LoadFromHash(
 
 	sObj, err := s.ObjectGet(h)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get object at %s: %s", h, err)
+		return nil, errors.Wrapf(err, "failed to get object at %s", h)
 	}
 
 	err = st.LastUpdatedFromInput(sObj.Data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read last updated from %s: %s", h, err)
+		return nil, errors.Wrapf(err, "failed to read last updated from %s", h)
 	}
 
 	for _, l := range sObj.Links {
@@ -88,7 +89,7 @@ func LoadFromHash(
 		case "players":
 			pl, err := loadPlayersFromHash(l.Hash, s)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load players at %s: %s", l.Hash, err)
+				return nil, errors.Wrapf(err, "failed to load players at %s", l.Hash)
 			}
 			st.Players = pl
 		}
@@ -102,17 +103,17 @@ func loadPlayersFromHash(h string, s *cachedshell.CachedShell) (map[string]*Play
 
 	plObj, err := s.ObjectGet(h)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get players object at %s: %s", h, err)
+		return nil, errors.Wrapf(err, "failed to get players object at %s", h)
 	}
 
 	for _, l := range plObj.Links {
 		p, err := loadPlayerFromHash(l.Hash, s)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load player at %s: %s", l.Hash, err)
+			return nil, errors.Wrapf(err, "failed to load player at %s", l.Hash)
 		}
 
 		if p.PublicKeyHash == "" {
-			return nil, fmt.Errorf("player created from %s has an empty public key hash", l.Hash)
+			return nil, errors.Errorf("player created from %s has an empty public key hash", l.Hash)
 		}
 
 		pl[p.PublicKeyHash] = p
@@ -126,12 +127,12 @@ func loadPlayerFromHash(h string, s *cachedshell.CachedShell) (*Player, error) {
 
 	pObj, err := s.ObjectGet(h)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get player object at %s: %s", h, err)
+		return nil, errors.Wrapf(err, "failed to get player object at %s", h)
 	}
 
 	err = json.Unmarshal([]byte(pObj.Data), &p)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal player JSON at %s: %s", h, err)
+		return nil, errors.Wrapf(err, "failed to unmarshal player JSON at %s", h)
 	}
 
 	for _, l := range pObj.Links {
@@ -159,11 +160,11 @@ func (st *State) Publish(
 	fsStTmp := filepath.Join(nodeDir, "state-tmp")
 	err := os.RemoveAll(fsStTmp)
 	if err != nil {
-		return fmt.Errorf("failed to remove %s: %s", fsStTmp, err)
+		return errors.Wrapf(err, "failed to remove %s", fsStTmp)
 	}
 	err = os.Mkdir(fsStTmp, 0700)
 	if err != nil {
-		return fmt.Errorf("failed to create %s: %s", fsStTmp, err)
+		return errors.Wrapf(err, "failed to create %s", fsStTmp)
 	}
 
 	err = ioutil.WriteFile(
@@ -172,18 +173,18 @@ func (st *State) Publish(
 		0644,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to write temporary last-updated file: %s", err)
+		return errors.Wrap(err, "failed to write temporary last-updated file")
 	}
 
 	plDir := filepath.Join(fsStTmp, "players")
 	err = os.Mkdir(plDir, 0700)
 	if err != nil {
-		return fmt.Errorf("failed to create %s: %s", plDir, err)
+		return errors.Wrapf(err, "failed to create %s", plDir)
 	}
 	for _, p := range st.Players {
 		j, err := json.MarshalIndent(p, "", "\t")
 		if err != nil {
-			return fmt.Errorf("failed to marshal player JSON: %s", err)
+			return errors.Wrap(err, "failed to marshal player JSON")
 		}
 		err = ioutil.WriteFile(
 			filepath.Join(plDir, fmt.Sprintf("%s.json", p.PublicKeyHash)),
@@ -191,64 +192,64 @@ func (st *State) Publish(
 			0644,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to write player file: %s", err)
+			return errors.Wrap(err, "failed to write player file")
 		}
 	}
 
 	fsSt := filepath.Join(nodeDir, "state")
 	err = os.RemoveAll(fsSt)
 	if err != nil {
-		return fmt.Errorf("failed to remove %s: %s", fsSt)
+		return errors.Wrapf(err, "failed to remove %s", fsSt)
 	}
 	err = os.Rename(fsStTmp, fsSt)
 	if err != nil {
-		return fmt.Errorf("failed to rename %s to %s: %s", fsStTmp, fsSt, err)
+		return errors.Wrapf(err, "failed to rename %s to %s", fsStTmp, fsSt)
 	}
 
 	identHash, err := s.AddPermanentFile(st.IdentityFile)
 	if err != nil {
-		return fmt.Errorf("failed to add identity file: %s", err)
+		return errors.Wrap(err, "failed to add identity file")
 	}
 	st.IdentityHash = identHash
 
 	plHash, err := s.NewObject("")
 	if err != nil {
-		return fmt.Errorf("failed to create players object: %s", err)
+		return errors.Wrap(err, "failed to create players object")
 	}
 	for _, p := range st.Players {
 		pHash, err := p.CreateIPFSObject(s, identHash)
 		if err != nil {
-			return fmt.Errorf("failed to create player object: %s", err)
+			return errors.Wrap(err, "failed to create player object")
 		}
 
 		plHash, err = s.PatchLink(plHash, p.PublicKeyHash, pHash, false)
 		if err != nil {
-			return fmt.Errorf("failed to add player link to players: %s", err)
+			return errors.Wrap(err, "failed to add player link to players")
 		}
 	}
 
 	stHash, err := s.NewObject("")
 	if err != nil {
-		return fmt.Errorf("failed to create state object: %s", err)
+		return errors.Wrap(err, "failed to create state object")
 	}
 	stHash, err = s.PatchData(stHash, true, st.LastUpdatedForOutput())
 	if err != nil {
-		return fmt.Errorf("failed to add last-updated to state: %s", err)
+		return errors.Wrap(err, "failed to add last-updated to state")
 	}
 
 	stHash, err = s.PatchLink(stHash, "identity.asc", identHash, false)
 	if err != nil {
-		return fmt.Errorf("failed to add identity.asc to state: %s", err)
+		return errors.Wrap(err, "failed to add identity.asc to state")
 	}
 
 	stHash, err = s.PatchLink(stHash, "players", plHash, false)
 	if err != nil {
-		return fmt.Errorf("failed to add players to state: %s", err)
+		return errors.Wrap(err, "failed to add players to state")
 	}
 
 	curObjHash, err := s.Resolve("")
 	if err != nil {
-		return fmt.Errorf("failed to resolve nodes IPNS: %s", err)
+		return errors.Wrap(err, "failed to resolve nodes IPNS")
 	}
 
 	newObjHash, err := s.Patch(
@@ -258,7 +259,7 @@ func (st *State) Publish(
 	)
 	if err != nil {
 		if !strings.HasSuffix(err.Error(), "not found") {
-			return fmt.Errorf("failed to remove old interplanetary-game-system link: %s", err)
+			return errors.Wrap(err, "failed to remove old interplanetary-game-system link")
 		}
 		// the interplanetary-game-system link didn't exist anyway, so we'll use
 		// the existing object for our purposes
@@ -272,17 +273,17 @@ func (st *State) Publish(
 		false,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to add state link to the base: %s", err)
+		return errors.Wrap(err, "failed to add state link to the base")
 	}
 
 	err = s.Pin(newObjHash)
 	if err != nil {
-		return fmt.Errorf("failed to pin the new IPNS base object: %s", err)
+		return errors.Wrap(err, "failed to pin the new IPNS base object")
 	}
 
 	err = s.Publish("", newObjHash)
 	if err != nil {
-		return fmt.Errorf("failed to publish new IPNS base object: %s", err)
+		return errors.Wrap(err, "failed to publish new IPNS base object")
 	}
 
 	log.Printf("published new IPNS base: /ipfs/%s", newObjHash)

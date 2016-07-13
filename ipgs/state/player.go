@@ -13,6 +13,7 @@ import (
 
 	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/apiarian/go-ipgs/ipgs/config"
+	"github.com/pkg/errors"
 )
 
 // Player describes the state of an IPGS player
@@ -61,33 +62,33 @@ func (p *Player) ipfsPlayer() *ipfsPlayer {
 func (p *Player) CreateIPFSObject(s *cachedshell.CachedShell, identHash string) (string, error) {
 	j, err := json.Marshal(p.ipfsPlayer())
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal player to JSON: %s", err)
+		return "", errors.Wrap(err, "failed to marshal player to JSON")
 	}
 
 	pHash, err := s.NewObject("")
 	if err != nil {
-		return "", fmt.Errorf("failed to create player object: %s", err)
+		return "", errors.Wrap(err, "failed to create player object")
 	}
 
 	pHash, err = s.PatchData(pHash, true, string(j))
 	if err != nil {
-		return "", fmt.Errorf("failed putd data in player object: %s", err)
+		return "", errors.Wrap(err, "failed putd data in player object")
 	}
 
 	pHash, err = s.PatchLink(pHash, "author-public-key", identHash, false)
 	if err != nil {
-		return "", fmt.Errorf("failed to add author-public-key link to player: %s", err)
+		return "", errors.Wrap(err, "failed to add author-public-key link to player")
 	}
 
 	pHash, err = s.PatchLink(pHash, "player-public-key", p.PublicKeyHash, false)
 	if err != nil {
-		return "", fmt.Errorf("failed to add player-public-key link to player: %s", err)
+		return "", errors.Wrap(err, "failed to add player-public-key link to player")
 	}
 
 	if p.PreviousVersionHash != "" {
 		pHash, err = s.PatchLink(pHash, "previous-version", p.PreviousVersionHash, false)
 		if err != nil {
-			return "", fmt.Errorf("failed to add previous-version link to player: %s", err)
+			return "", errors.Wrap(err, "failed to add previous-version link to player")
 		}
 	}
 
