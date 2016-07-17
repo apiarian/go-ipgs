@@ -18,7 +18,7 @@ import (
 
 // Player describes the state of an IPGS player
 type Player struct {
-	// PublicKeyHash is the IPFS hash of the player's IPGS identity.asc file
+	// PublicKeyHash is the IPFS hash of the player's IPGS identity file
 	PublicKeyHash string
 
 	// PreviousVersionHash is the IPFS hash of the previous version of this player's

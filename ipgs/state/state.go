@@ -15,6 +15,12 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	// IdentityLinkName is the name of the IPFS link pointing to a player's
+	// identity file
+	IdentityLinkName = "identity.pem"
+)
+
 // IPGSTime wraps around time.Time for consistent text formatting
 type IPGSTime struct {
 	time.Time
@@ -28,9 +34,9 @@ func (t IPGSTime) MarshalJSON() ([]byte, error) {
 
 // State describes the state of IPGS node
 type State struct {
-	// IdentityFile is the path to the identity.asc file for the user
+	// IdentityFile is the path to the identity file for the user
 	IdentityFile string
-	// IdentityHash is the IPFS hash of the identity.asc file for the user
+	// IdentityHash is the IPFS hash of the identity file for the user
 	IdentityHash string
 	// LastUpdated is the time when this node was last updated
 	LastUpdated IPGSTime
@@ -84,7 +90,7 @@ func LoadFromHash(
 
 	for _, l := range sObj.Links {
 		switch l.Name {
-		case "identity.asc":
+		case IdentityLinkName:
 			st.IdentityHash = l.Hash
 		case "players":
 			pl, err := loadPlayersFromHash(l.Hash, s)
@@ -237,9 +243,9 @@ func (st *State) Publish(
 		return errors.Wrap(err, "failed to add last-updated to state")
 	}
 
-	stHash, err = s.PatchLink(stHash, "identity.asc", identHash, false)
+	stHash, err = s.PatchLink(stHash, IdentityLinkName, identHash, false)
 	if err != nil {
-		return errors.Wrap(err, "failed to add identity.asc to state")
+		return errors.Wrap(err, "failed to add identity link to state")
 	}
 
 	stHash, err = s.PatchLink(stHash, "players", plHash, false)
@@ -249,7 +255,15 @@ func (st *State) Publish(
 
 	curObjHash, err := s.Resolve("")
 	if err != nil {
-		return errors.Wrap(err, "failed to resolve nodes IPNS")
+		// TODO: change this to a more sensible error identification process
+		if !strings.HasSuffix(err.Error(), "Could not resolve name.") {
+			return errors.Wrap(err, "failed to resolve nodes IPNS")
+		}
+
+		curObjHash, err = s.NewObject("")
+		if err != nil {
+			return errors.Wrap(err, "failed to create new IPNS base object")
+		}
 	}
 
 	newObjHash, err := s.Patch(

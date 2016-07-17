@@ -85,6 +85,8 @@ to quickly create a Cobra application.`,
 		st, err = loadLatestState(nodeDir, cfg, s)
 		util.FatalIfErr("load latest state", err)
 
+		log.Printf("initial state: %+v\n", st)
+
 		mx = &sync.Mutex{}
 
 		http.HandleFunc(
@@ -183,12 +185,20 @@ func loadLatestState(
 			}
 
 			fsSt.Players[p.PublicKeyHash] = p
+
 		}
+
+		identHash, err := s.AddPermanentFile(filepath.Join(nodeDir, IdentityFilename))
+		if err != nil {
+			return nil, errors.Wrap(err, "could not get the hash of the identity file")
+		}
+
+		fsSt.IdentityHash = identHash
 
 		curSt = fsSt
 	}
 
-	curSt.IdentityFile = filepath.Join(nodeDir, "identity.asc")
+	curSt.IdentityFile = filepath.Join(nodeDir, IdentityFilename)
 
 	return curSt, nil
 }

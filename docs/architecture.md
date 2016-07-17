@@ -25,7 +25,7 @@ All of the public data for a node is stored in the `/ipns/[node-id]/interplaneta
 ```
 ipns/[node-id]/interplanetary-game-system/
 | data: "[last-updated-timestamp]"
-| identity.asc
+| identity.pem
 | my-nodes.txt
 | my-nodes.sig
 | version
@@ -61,11 +61,11 @@ ipns/[node-id]/interplanetary-game-system/
 
 Though the IPFS system has the concept of nodes identified by their public/private key pair, this is insufficient for tracking players in a game network. A player may wish to maintain multiple access nodes to the network (home computer, mobile device, backup server). Sharing the node key pair between these machines is unsupported, could pose a security risk, and would probably be inconvenient.
 
-A standard GPG key pair is proposed as the basis of identity for a player entity in this system. The master key pair is the main source of a player's identity, while a signing subkey is used in the day to day interactions with the system.  An existing GPG key could be used, or a new one could be generated for the game system. 
+The player identity is based on a ECDSA P256 keypair. This data is stored in pem format, so it is possible that in the future other key formats will be supported. An new keypair can be created for a node, or an existing private key file can be imported during the IPGS configuration process.
 
-The public half of the key is stored at `/ipns/[state]/identity.asc` as ASCII armored text file. This form of public signature can be created using the `gpg --armor --output identity.asc --export player@ipgs` command. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
+The public half of the key is stored at `/ipns/[state]/identity.pem`. The IPFS hash of this file is referred throughout this document as `[public-key-hash]` (possibly with prefixes such as `[committer-public-key-hash]` or `[player-public-key-hash]`.
 
-The list of nodes, including the current node, associated with the identity is stored at `/ipns/[state]/my-nodes.txt`. The file contains Node-IDs, one per line. The associated GPG signature for this list is stored at `/ipns/[state]/my-nodes.sig`. This kind of signature can be created using the `gpg --output my-nodes.sig --detach-sig my-nodes.txt` command.
+The list of nodes, including the current node, associated with the identity is stored at `/ipns/[state]/my-nodes.txt`. The file contains Node-IDs, one per line. The associated signature for this list is stored at `/ipns/[state]/my-nodes.sig`.
 
 
 ## Player Rating
@@ -122,6 +122,7 @@ IPGS Commits are used to track the history of an ongoing game from the Game Chal
 
 The `parent` link is omitted for the first commit.
 
+*TODO: update this part with some sort of sensible signature process*
 The `[commit-signature]` is the ASCII-armored signature using the player's private key of the following string: `[commit-timestamp]|[commit-type-name]|[committer-public-key-hash]|[commit-data-hash]|[parent-commit-hash]`.  The `[parent-commit-hash]` is replaced with the string `none` for the first commit. This signature can be created using the `echo [string-to-sign] | gpg --armor --output [tmp-file] --detach-sig -` commands.
 
 The `[commit-type-name]` may be one of the following:

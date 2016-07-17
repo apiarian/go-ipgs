@@ -4,14 +4,11 @@ package util
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/pkg/errors"
-	"golang.org/x/crypto/openpgp"
 )
 
 var inputScanner *bufio.Scanner
@@ -78,75 +75,6 @@ func GetIntForPrompt(prompt string, def int) (int, error) {
 	}
 
 	return i, nil
-}
-
-// GetPublicPrivateRings returns the public and private keyrings from the
-// gpgHome directory.
-func GetPublicPrivateRings(gpgHome string) (openpgp.EntityList, openpgp.EntityList, error) {
-	pubRing, err := getRingFromFile(filepath.Join(gpgHome, "pubring.gpg"))
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "failed to get public keyring")
-	}
-
-	prvRing, err := getRingFromFile(filepath.Join(gpgHome, "secring.gpg"))
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "failed to get private keyring")
-	}
-
-	return pubRing, prvRing, nil
-}
-
-func getRingFromFile(filename string) (openpgp.EntityList, error) {
-	ringFile, err := os.Open(filename)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to open keyring file")
-	}
-	defer ringFile.Close()
-
-	ring, err := openpgp.ReadKeyRing(ringFile)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to read keyring file")
-	}
-
-	return ring, nil
-}
-
-// FindEntityForKeyId searches the keyring provided for an *openpgp.Entity with
-// a primary key short id string equal to the id provided
-func FindEntityForKeyId(ring openpgp.EntityList, id string) (*openpgp.Entity, error) {
-	var e *openpgp.Entity
-	for _, v := range ring {
-		if v.PrimaryKey.KeyIdShortString() == id {
-			e = v
-			break
-		}
-	}
-
-	if e == nil {
-		return nil, errors.Errorf("could not find %s in the keyring", id)
-	}
-
-	return e, nil
-}
-
-// ArmoredDetachedSignToFile signs the contents of m to a new file at filename
-// using the entity e. The signature may be checked with gpg on the command
-// line by invoking `echo 'data in the message' | gpg --verify filename -` .
-// The echo command may need a -n flag if the message did not have a trailing
-// newline.
-func ArmoredDetachedSignToFile(e *openpgp.Entity, m io.Reader, filename string) error {
-	f, err := os.Create(filename)
-	if err != nil {
-		return errors.Wrap(err, "failed to create signature file")
-	}
-	defer f.Close()
-
-	err = openpgp.ArmoredDetachSignText(f, e, m, nil)
-	if err != nil {
-		return errors.Wrap(err, "failed to make signer")
-	}
-
-	return nil
 }
 
 // FatalIfErr uses log.Fatalln to halt execution if err is not nil with the

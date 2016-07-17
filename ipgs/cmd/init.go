@@ -24,15 +24,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/armor"
-
 	"github.com/apiarian/go-ipgs/cache"
+	"github.com/apiarian/go-ipgs/crypto"
 	"github.com/apiarian/go-ipgs/ipgs/common"
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
@@ -41,6 +38,15 @@ import (
 	"github.com/spf13/cobra"
 
 	ipfs_config "github.com/ipfs/go-ipfs/repo/config"
+)
+
+const (
+	// PrivateKeyFilename is the filename of the IPGS private key file under the
+	// node directory
+	PrivateKeyFilename = "private.pem"
+	// IdentityFilename is the filename of the IPGS public key file under the
+	// node directory
+	IdentityFilename = "identity.pem"
 )
 
 // initCmd represents the init command
@@ -56,9 +62,6 @@ var initCmd = &cobra.Command{
 		util.FatalIfErr("get a clean node directory", err)
 		log.Println("using the following node directory:", nodeDir)
 
-		gpgCfg, err := getGpgConfig(nodeDir)
-		util.FatalIfErr("get the GPG configuration", err)
-
 		ipfsCfg, err := getIpfsConfig()
 		util.FatalIfErr("get the IPFS configuration", err)
 
@@ -66,12 +69,14 @@ var initCmd = &cobra.Command{
 		util.FatalIfErr("get the IPGS configuration", err)
 
 		c := config.Config{
-			GPG:  gpgCfg,
 			IPFS: ipfsCfg,
 			IPGS: ipgsCfg,
 		}
 		err = c.Save(nodeDir)
 		util.FatalIfErr("save the configuration", err)
+
+		err = initCrypto(nodeDir)
+		util.FatalIfErr("initialize cryptographic components", err)
 
 		err = bootstrapState(nodeDir, c)
 		util.FatalIfErr("bootstrap the state", err)
@@ -150,162 +155,6 @@ func getCleanNodeDir(nodeDir string) (string, error) {
 	return nodeDir, nil
 }
 
-func getGpgConfig(nodeDir string) (config.GpgConfig, error) {
-	gpghome, ok := os.LookupEnv("GNUPGHOME")
-	if !ok {
-		gpghome = os.ExpandEnv("$HOME/.gnupg/")
-	}
-
-	c := config.GpgConfig{
-		Home:       gpghome,
-		ShortKeyID: "",
-	}
-
-	newHome, err := util.GetStringForPrompt(
-		"GPG Home directory",
-		c.Home,
-	)
-	if err != nil {
-		return c, errors.Wrap(err, "failed to get GPG home directory input")
-	}
-	c.Home = newHome
-
-	needNewKeys, err := util.GetBoolForPrompt("create new OpenPGP keypair for this node?", true)
-	if err != nil {
-		return c, errors.Wrap(err, "failed to read OpenPGP keypair creation confirmation")
-	}
-
-	if needNewKeys {
-		gpgPath, err := exec.LookPath("gpg")
-		if err != nil {
-			return c, errors.Wrap(err, "IPGS depends on the gpg keychain for key storage; failed to find gpg in the search path")
-		}
-
-		gpgOk, err := util.GetBoolForPrompt(
-			fmt.Sprintf("found gpg at %s; ok?", gpgPath),
-			true,
-		)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get gpg path confirmation")
-		}
-		if !gpgOk {
-			return c, errors.Errorf("please make sure that the correct gpg executable is topmost in your search path")
-		}
-
-		name, err := util.GetStringForPrompt(
-			"OpenPGP Entity Name",
-			"",
-		)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get OpenPGP Entity Name")
-		}
-		comment, err := util.GetStringForPrompt(
-			"OpenPGP Entity Comment",
-			"IPGS Player Identity",
-		)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get OpenPGP Entity Comment")
-		}
-		email, err := util.GetStringForPrompt(
-			"OpenPGP Entity Email",
-			fmt.Sprintf(
-				"%s@ipgs",
-				strings.Replace(
-					strings.ToLower(name),
-					" ",
-					"",
-					-1,
-				),
-			),
-		)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get OpenPGP Entity Email")
-		}
-
-		entity, err := openpgp.NewEntity(name, comment, email, nil)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to create new OpenPGP entity")
-		}
-		c.ShortKeyID = entity.PrimaryKey.KeyIdShortString()
-		log.Println("created key", c.ShortKeyID)
-
-		for _, id := range entity.Identities {
-			err := id.SelfSignature.SignUserId(
-				id.UserId.Id,
-				entity.PrimaryKey,
-				entity.PrivateKey,
-				nil,
-			)
-			if err != nil {
-				return c, errors.Wrap(err, "failed to self-sign identity")
-			}
-		}
-
-		privateKeyFile, err := os.Create(filepath.Join(nodeDir, "private.asc"))
-		if err != nil {
-			return c, errors.Wrap(err, "failed to create private key file")
-		}
-		defer privateKeyFile.Close()
-		err = privateKeyFile.Chmod(0400)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to set the private key file to read-only")
-		}
-		privateEncoder, err := armor.Encode(privateKeyFile, openpgp.PrivateKeyType, nil)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to create armorer for private key")
-		}
-		entity.SerializePrivate(privateEncoder, nil)
-		privateEncoder.Close()
-		privateKeyFile.Close()
-		cmd := exec.Command(
-			gpgPath,
-			"--homedir",
-			c.Home,
-			"--import",
-			privateKeyFile.Name(),
-		)
-		o, err := cmd.CombinedOutput()
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get the combined output from gpg command")
-		} else {
-			log.Printf("captured the following data from gpg:\n\n%s\n", string(o))
-		}
-
-		delPrivKey, err := util.GetBoolForPrompt(
-			"delete the private key file?",
-			true,
-		)
-		if err != nil {
-			log.Printf("failed to get confirmation for deleting the private key file: %s\n\ndeleting by default")
-			delPrivKey = true
-		}
-
-		if delPrivKey {
-			err := os.Remove(privateKeyFile.Name())
-			if err != nil {
-				log.Println(
-					"failed to delete the private key file; please delete it manually from",
-					privateKeyFile.Name(),
-				)
-			} else {
-				log.Println("deleted the private key file")
-			}
-		}
-	} else {
-		// do not need to create a new key
-
-		c.ShortKeyID, err = util.GetStringForPrompt(
-			"OpenPGP Short Key ID",
-			c.ShortKeyID,
-		)
-		if err != nil {
-			return c, errors.Wrap(err, "failed to get the OpenPGP Short Key ID")
-		}
-	}
-
-	return c, nil
-}
-
 func getIpfsConfig() (config.IpfsConfig, error) {
 	c := config.IpfsConfig{
 		Path: ipfs_config.DefaultPathRoot,
@@ -335,11 +184,83 @@ func getIpfsConfig() (config.IpfsConfig, error) {
 	return c, nil
 }
 
+func initCrypto(nodeDir string) error {
+	reuseIdent, err := util.GetBoolForPrompt("use existing identity?", false)
+	if err != nil {
+		return errors.Wrap(err, "failed to get identity reuse choice from user")
+	}
+
+	var k *crypto.PrivateKey
+
+	if reuseIdent {
+		identPath, err := util.GetStringForPrompt("existing identity path", "")
+		if err != nil {
+			return errors.Wrap(err, "failed to get existing identity path from user")
+		}
+
+		if identPath == "" {
+			return errors.New("the user wanted to reuse an identity but did not provide its path")
+		}
+
+		identFile, err := os.Open(identPath)
+		if err != nil {
+			return errors.Wrap(err, "failed to open identity path")
+		}
+		defer identFile.Close()
+
+		k, err = crypto.ReadPrivateKey(identFile)
+		if err != nil {
+			return errors.Wrap(err, "failed to read private key from identity file")
+		}
+	} else {
+		k, err = crypto.NewPrivateKey()
+		if err != nil {
+			return errors.Wrap(err, "failed to create a new private key")
+		}
+
+		n, err := util.GetStringForPrompt("name for the new identity", "")
+		if err != nil {
+			return errors.Wrap(err, "failed to get name from the user")
+		}
+
+		c, err := util.GetStringForPrompt("comment for the new identity", "IPGS Identity")
+		if err != nil {
+			return errors.Wrap(err, "failed to get comment from the user")
+		}
+
+		k.Name = n
+		k.Comment = c
+	}
+
+	f, err := os.Create(filepath.Join(nodeDir, PrivateKeyFilename))
+	if err != nil {
+		return errors.Wrap(err, "failed to create private key file")
+	}
+	defer f.Close()
+
+	err = f.Chmod(0600)
+	if err != nil {
+		return errors.Wrap(err, "failed to set private key file to user r/w only")
+	}
+
+	err = crypto.WritePrivateKey(k, f)
+	if err != nil {
+		return errors.Wrap(err, "failed to write private key to file")
+	}
+
+	err = f.Chmod(0400)
+	if err != nil {
+		return errors.Wrap(err, "failed to set private key file to user read-only")
+	}
+
+	return nil
+}
+
 func bootstrapState(nodeDir string, cfg config.Config) error {
 	// write the identity file to the node directory, not the state since it
 	// won't be changing for the life of the node and we don't need to keep
 	// copying and moving it around when we do our state dance
-	idFilename, err := writeIdentityFile(nodeDir, cfg.GPG)
+	err := writeIdentityFile(nodeDir)
 	if err != nil {
 		return errors.Wrap(err, "could not write identity file")
 	}
@@ -350,28 +271,24 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 		return errors.Wrap(err, "could not create IPFS shell")
 	}
 
-	pubKeyHash, err := s.AddPermanentFile(idFilename)
+	pubKeyHash, err := s.AddPermanentFile(filepath.Join(nodeDir, IdentityFilename))
 	if err != nil {
-		return errors.Wrap(err, "could not add identity.asc permanently")
+		return errors.Wrap(err, "could not add identity file permanently")
 	}
 
-	_, prvRing, err := util.GetPublicPrivateRings(cfg.GPG.Home)
+	privFile, err := os.Open(filepath.Join(nodeDir, PrivateKeyFilename))
 	if err != nil {
-		return errors.Wrap(err, "could not load private keyring")
+		return errors.Wrap(err, "failed to open private key file")
 	}
-	entity, err := util.FindEntityForKeyId(prvRing, cfg.GPG.ShortKeyID)
+
+	k, err := crypto.ReadPublicKey(privFile)
 	if err != nil {
-		return errors.Wrap(err, "could not find the node's identity")
-	}
-	var n string
-	for _, v := range entity.Identities {
-		n = v.UserId.Name
-		break
+		return errors.Wrap(err, "failed to read the public key")
 	}
 
 	name, err := util.GetStringForPrompt(
 		"player name",
-		n,
+		k.Name,
 	)
 	if err != nil {
 		return errors.Errorf("could not get player name from user")
@@ -396,7 +313,7 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 	}
 
 	st := state.NewState()
-	st.IdentityFile = idFilename
+	st.IdentityFile = filepath.Join(nodeDir, IdentityFilename)
 	st.LastUpdated = state.IPGSTime{time.Now()}
 	st.Players[player.PublicKeyHash] = player
 
@@ -408,32 +325,30 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 	return nil
 }
 
-func writeIdentityFile(nodeDir string, gpgCfg config.GpgConfig) (string, error) {
-	_, prvRing, err := util.GetPublicPrivateRings(gpgCfg.Home)
+func writeIdentityFile(nodeDir string) error {
+	f, err := os.Open(filepath.Join(nodeDir, PrivateKeyFilename))
 	if err != nil {
-		return "", errors.Wrap(err, "failed to load private keyring")
+		return errors.Wrap(err, "failed to open private key file")
+	}
+	defer f.Close()
+
+	k, err := crypto.ReadPrivateKey(f)
+	if err != nil {
+		return errors.Wrap(err, "failed to read private key file")
 	}
 
-	entity, err := util.FindEntityForKeyId(prvRing, gpgCfg.ShortKeyID)
+	pubF, err := os.Create(filepath.Join(nodeDir, IdentityFilename))
 	if err != nil {
-		return "", errors.Wrap(err, "failed to find the node's entity")
+		return errors.Wrap(err, "failed to create public key file")
+	}
+	defer pubF.Close()
+
+	err = crypto.WritePublicKey(k.GetPublicKey(), pubF)
+	if err != nil {
+		return errors.Wrap(err, "failed to write the public key")
 	}
 
-	pubKeyFile, err := os.Create(filepath.Join(nodeDir, "identity.asc"))
-	if err != nil {
-		return "", errors.Wrap(err, "failed to create public key file")
-	}
-	defer pubKeyFile.Close()
-
-	pubEncoder, err := armor.Encode(pubKeyFile, openpgp.PublicKeyType, nil)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to create armorer for the public key")
-	}
-	defer pubEncoder.Close()
-
-	entity.Serialize(pubEncoder)
-
-	return pubKeyFile.Name(), nil
+	return nil
 }
 
 func getIpgsConfig() (config.IpgsConfig, error) {
