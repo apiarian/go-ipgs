@@ -39,6 +39,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"goji.io"
+	"goji.io/pat"
 )
 
 // daemonCmd represents the daemon command
@@ -85,18 +87,30 @@ to quickly create a Cobra application.`,
 		st, err = loadLatestState(nodeDir, cfg, s)
 		util.FatalIfErr("load latest state", err)
 
-		log.Printf("initial state: %+v\n", st)
-
 		mx = &sync.Mutex{}
 
-		http.HandleFunc(
-			"/players/",
-			state.MakePlayersHandlerFunc(nodeDir, cfg, s, st, mx),
+		log.Printf("initial state: %+v\n", st)
+
+		root := goji.NewMux()
+		players := goji.SubMux()
+		root.HandleC(pat.New("/players/*"), players)
+
+		players.HandleFuncC(
+			pat.Get("/:id"),
+			state.MakePlayersGetOneHandler(st, mx),
+		)
+		players.HandleFuncC(
+			pat.Get("/"),
+			state.MakePlayersGetHandler(st, mx),
+		)
+		players.HandleFuncC(
+			pat.Post("/"),
+			state.MakePlayersPostHandler(nodeDir, cfg, s, st, mx),
 		)
 
 		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
 		log.Println("HTTP API starting at", addr)
-		log.Fatal(http.ListenAndServe(addr, nil))
+		log.Fatal(http.ListenAndServe(addr, root))
 
 		// st.LastUpdated = state.IPGSTime{time.Now()}
 
@@ -123,7 +137,7 @@ func init() {
 func loadLatestState(
 	nodeDir string,
 	c config.Config,
-	s *cachedshell.CachedShell,
+	s *cachedshell.Shell,
 ) (*state.State, error) {
 	stDir := filepath.Join(nodeDir, "state")
 

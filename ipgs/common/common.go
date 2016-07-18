@@ -13,8 +13,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-// MakeIpfsShell creates a CachedShell given the IPGS config and a Cache
-func MakeIpfsShell(c config.Config, ca *cache.Cache) (*cachedshell.CachedShell, error) {
+// MakeIpfsShell creates a Shell given the IPGS config and a Cache
+func MakeIpfsShell(c config.Config, ca *cache.Cache) (*cachedshell.Shell, error) {
 	fn, err := ipfs_config.Filename(c.IPFS.Path)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to build IPFS config filename")
@@ -31,7 +31,7 @@ func MakeIpfsShell(c config.Config, ca *cache.Cache) (*cachedshell.CachedShell, 
 		return nil, errors.Wrap(err, "failed to unmarshal IPFS config json")
 	}
 
-	s := cachedshell.NewCachedShell(ipfsCfg.Addresses.API, ca)
+	s := cachedshell.NewShell(ipfsCfg.Addresses.API, ca)
 	_, err = s.ID()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get ID from IPFS node")

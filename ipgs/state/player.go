@@ -7,13 +7,15 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/pkg/errors"
+	"goji.io"
+	"goji.io/pat"
+	"golang.org/x/net/context"
 )
 
 // Player describes the state of an IPGS player
@@ -59,7 +61,7 @@ func (p *Player) ipfsPlayer() *ipfsPlayer {
 	}
 }
 
-func (p *Player) CreateIPFSObject(s *cachedshell.CachedShell, identHash string) (string, error) {
+func (p *Player) CreateIPFSObject(s *cachedshell.Shell, identHash string) (string, error) {
 	j, err := json.Marshal(p.ipfsPlayer())
 	if err != nil {
 		return "", errors.Wrap(err, "failed to marshal player to JSON")
@@ -95,159 +97,172 @@ func (p *Player) CreateIPFSObject(s *cachedshell.CachedShell, identHash string) 
 	return pHash, nil
 }
 
-var PlayersUrlRe = regexp.MustCompile(`^/players/([0-9A-Za-z]*)[/]?$`)
-
 type playersPOSTformat struct {
 	Nodes []string
 }
 
-func MakePlayersHandlerFunc(
-	nodeDir string,
-	c config.Config,
-	s *cachedshell.CachedShell,
+func WriteJSON(w http.ResponseWriter, d interface{}, c int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	w.WriteHeader(c)
+
+	err := json.NewEncoder(w).Encode(d)
+
+	if err != nil {
+		log.Println("failed to marshal %+v into JSON")
+
+		w.WriteHeader(http.StatusInternalServerError)
+
+		w.Write([]byte(`"internal server error"`))
+		return
+	}
+}
+
+func WriteError(w http.ResponseWriter, e error, c int) {
+	log.Printf("returning error(%v) to user: %+v\n", c, e)
+
+	WriteJSON(
+		w,
+		struct {
+			Error, Details string
+		}{
+			e.Error(), fmt.Sprintf("%+v", e),
+		},
+		c,
+	)
+}
+
+func MakePlayersGetHandler(
 	st *State,
 	mx *sync.Mutex,
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 		mx.Lock()
 		defer mx.Unlock()
 
-		sm := PlayersUrlRe.FindStringSubmatch(r.URL.Path)
-		if len(sm) == 0 {
-			http.Error(
+		WriteJSON(w, st.Players, http.StatusOK)
+	}
+}
+
+func MakePlayersGetOneHandler(
+	st *State,
+	mx *sync.Mutex,
+) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		mx.Lock()
+		defer mx.Unlock()
+
+		playerID := pat.Param(ctx, "id")
+
+		player, ok := st.Players[playerID]
+
+		if !ok {
+			WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
+			return
+		}
+
+		WriteJSON(w, player, http.StatusOK)
+	}
+}
+
+func MakePlayersPostHandler(
+	nodeDir string,
+	cfg config.Config,
+	s *cachedshell.Shell,
+	st *State,
+	mx *sync.Mutex,
+) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		mx.Lock()
+		defer mx.Unlock()
+
+		body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			WriteError(
 				w,
-				"available endpoints: /players/, /players/:player-id",
-				http.StatusNotFound,
+				errors.Wrap(err, "failed to read POST body"),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+		if err = r.Body.Close(); err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, "failed to close POST body"),
+				http.StatusInternalServerError,
 			)
 			return
 		}
 
-		playerID := sm[1]
+		var postedPlayers playersPOSTformat
+		err = json.Unmarshal(body, &postedPlayers)
+		if err != nil || len(postedPlayers.Nodes) == 0 {
+			WriteError(
+				w,
+				errors.Wrap(
+					err,
+					`expected data format: {"Nodes":["node-id-1","node-id-2"]}`,
+				),
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-		pl := st.Players
-
-		if playerID == "" {
-			switch r.Method {
-			case http.MethodGet:
-				j, err := json.MarshalIndent(pl, "", "\t")
-				if err != nil {
-					log.Println("failed to marshal players to JSON:", err)
-					http.Error(w, "internal error", http.StatusInternalServerError)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.Write(j)
-				w.Write([]byte("\n"))
-
-			case http.MethodPost:
-				body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
-				if err != nil {
-					log.Println("failed to read /players/ POST body:", err)
-					http.Error(w, "internal error", http.StatusInternalServerError)
-					return
-				}
-				if err = r.Body.Close(); err != nil {
-					log.Println("failed to close /players/ POST body:", err)
-					http.Error(w, "internal error", http.StatusInternalServerError)
-					return
-				}
-
-				var postedPlayers playersPOSTformat
-				err = json.Unmarshal(body, &postedPlayers)
-				if err != nil || len(postedPlayers.Nodes) == 0 {
-					http.Error(
-						w,
-						"invalid data format; sample format:\n",
-						http.StatusBadRequest,
-					)
-					err = json.NewEncoder(w).Encode(
-						playersPOSTformat{
-							Nodes: []string{
-								pl[st.IdentityHash].Nodes[0],
-								"other-node-ids",
-							},
-						},
-					)
-					if err != nil {
-						log.Println("failed to marshal sample /players/ POST struct: %s", err)
-					}
-					w.Write([]byte("\n"))
-				}
-
-				for _, pn := range postedPlayers.Nodes {
-					ipnsHash, err := s.Resolve(fmt.Sprintf("/ipns/%s", pn))
-					if err != nil {
-						log.Println("failed to resolve provided node IPNS:", err)
-						http.Error(
-							w,
-							fmt.Sprintf("could not resolve node %s", pn),
-							http.StatusNotFound,
-						)
-						return
-					}
-
-					stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
-					if err != nil {
-						log.Println("failed to find ipgs object on node:", err)
-						http.Error(
-							w,
-							fmt.Sprintf("could not find interplanetary-game-system object for node %s", pn),
-							http.StatusNotFound,
-						)
-						return
-					}
-
-					remoteSt, err := LoadFromHash(stHash, s)
-					if err != nil {
-						log.Println("failed to load ipgs object on node:", err)
-						http.Error(
-							w,
-							fmt.Sprintf("could not load IPGS state for node %s", pn),
-							http.StatusInternalServerError,
-						)
-						return
-					}
-
-					p, ok := remoteSt.Players[remoteSt.IdentityHash]
-					if !ok {
-						log.Println("could not find the playser's object at their node")
-						http.Error(
-							w,
-							fmt.Sprintf("could not find player's object for node %s", pn),
-							http.StatusInternalServerError,
-						)
-						return
-					}
-
-					st.Players[p.PublicKeyHash] = p
-					st.LastUpdated = IPGSTime{time.Now()}
-				}
-
-				err = st.Publish(nodeDir, c, s)
-				if err != nil {
-					log.Println("failed to publish updated state", err)
-					http.Error(
-						w,
-						"could not publish updated state",
-						http.StatusInternalServerError,
-					)
-					return
-				}
-
-				w.WriteHeader(http.StatusCreated)
-
-				return
-			default:
-				log.Printf("got request to %s on /players/", r.Method)
-				http.Error(
+		for _, pn := range postedPlayers.Nodes {
+			ipnsHash, err := s.Resolve(fmt.Sprintf("/ipns/%s", pn))
+			if err != nil {
+				WriteError(
 					w,
-					"available methods: GET, POST",
-					http.StatusNotImplemented,
+					errors.Wrapf(err, "could not resolve %s", pn),
+					http.StatusNotFound,
 				)
 				return
 			}
-		} else {
-			fmt.Fprintf(w, "looking for player %s in %+v", playerID, pl)
+
+			stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
+			if err != nil {
+				WriteError(
+					w,
+					errors.Wrapf(err, "could not find IPFS object under node %s", pn),
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			remoteSt, err := LoadFromHash(stHash, s)
+			if err != nil {
+				WriteError(
+					w,
+					errors.Wrapf(err, "could not load IPGS object for node %s", pn),
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+			p, ok := remoteSt.Players[remoteSt.IdentityHash]
+			if !ok {
+				WriteError(
+					w,
+					errors.Wrapf(err, "could not find player's object for node %s", pn),
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+			st.Players[p.PublicKeyHash] = p
+			st.LastUpdated = IPGSTime{time.Now()}
 		}
+
+		err = st.Publish(nodeDir, cfg, s)
+		if err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, "could not publish updated state"),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
 	}
 }

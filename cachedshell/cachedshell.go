@@ -10,22 +10,22 @@ import (
 	"github.com/pkg/errors"
 )
 
-// CachedShell embeds the go-ipfs-api shell with an extra *Cache
-type CachedShell struct {
+// Shell embeds the go-ipfs-api shell with an extra *Cache
+type Shell struct {
 	*shell.Shell
 	Cache *cache.Cache
 }
 
-// NewCachedShell takes the IPFS API url and an existing cache and returns a *CachedShell
-func NewCachedShell(url string, c *cache.Cache) *CachedShell {
-	return &CachedShell{shell.NewShell(url), c}
+// NewShell takes the IPFS API url and an existing cache and returns a *Shell
+func NewShell(url string, c *cache.Cache) *Shell {
+	return &Shell{shell.NewShell(url), c}
 }
 
 // AddPermanentFile adds a file by its filename to IPFS returns the resulting
 // object's hash. The hash is cached on a per-filename basis, so future calls to
 // this method simply return the cached version of the hash for the same
 // filename, assuming that the file has not changed.
-func (s *CachedShell) AddPermanentFile(filename string) (string, error) {
+func (s *Shell) AddPermanentFile(filename string) (string, error) {
 	key := fmt.Sprintf("permanent-file-%s", filename)
 
 	hash, err := s.Cache.ReadString(key)
@@ -54,7 +54,7 @@ func (s *CachedShell) AddPermanentFile(filename string) (string, error) {
 
 // ClearPermanentFile clears the cache value for the pernanent file hash
 // previously added by AddPermanentFile.
-func (s *CachedShell) ClearPermanentFile(filename string) {
+func (s *Shell) ClearPermanentFile(filename string) {
 	key := fmt.Sprintf("permanent-file-%s", filename)
 
 	s.Cache.Clear(key)

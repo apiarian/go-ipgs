@@ -74,7 +74,7 @@ func (st *State) LastUpdatedFromInput(s string) error {
 // of an /ipns/:node-id/interplanetary-game-system link.
 func LoadFromHash(
 	h string,
-	s *cachedshell.CachedShell,
+	s *cachedshell.Shell,
 ) (*State, error) {
 	st := NewState()
 
@@ -104,7 +104,7 @@ func LoadFromHash(
 	return st, nil
 }
 
-func loadPlayersFromHash(h string, s *cachedshell.CachedShell) (map[string]*Player, error) {
+func loadPlayersFromHash(h string, s *cachedshell.Shell) (map[string]*Player, error) {
 	pl := make(map[string]*Player)
 
 	plObj, err := s.ObjectGet(h)
@@ -128,7 +128,7 @@ func loadPlayersFromHash(h string, s *cachedshell.CachedShell) (map[string]*Play
 	return pl, nil
 }
 
-func loadPlayerFromHash(h string, s *cachedshell.CachedShell) (*Player, error) {
+func loadPlayerFromHash(h string, s *cachedshell.Shell) (*Player, error) {
 	var p *Player
 
 	pObj, err := s.ObjectGet(h)
@@ -161,7 +161,7 @@ func loadPlayerFromHash(h string, s *cachedshell.CachedShell) (*Player, error) {
 func (st *State) Publish(
 	nodeDir string,
 	cfg config.Config,
-	s *cachedshell.CachedShell,
+	s *cachedshell.Shell,
 ) error {
 	fsStTmp := filepath.Join(nodeDir, "state-tmp")
 	err := os.RemoveAll(fsStTmp)
