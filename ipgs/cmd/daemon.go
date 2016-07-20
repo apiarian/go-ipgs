@@ -136,7 +136,7 @@ func init() {
 
 func loadLatestState(
 	nodeDir string,
-	c config.Config,
+	cfg config.Config,
 	s *cachedshell.Shell,
 ) (*state.State, error) {
 	stDir := filepath.Join(nodeDir, "state")
@@ -155,30 +155,29 @@ func loadLatestState(
 	var ipfsSt *state.State
 
 	ipnsHash, err := s.Resolve("")
-	if err != nil {
+	// TODO: I really wish we had more actionable error messages in go-ipfs-api
+	if err != nil && !strings.HasSuffix(err.Error(), "Could not resolve name.") {
 		return nil, errors.Wrap(err, "failed to resolve nodes's IPNS")
 	}
 
-	stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
-	if err != nil {
-		// TODO: fix this to not use error text checking
-		if !strings.Contains(err.Error(), `no link named "interplanetary-game-system"`) {
-			return nil, errors.Wrap(err, "failed to request IPGS state under IPNS")
-		}
-	} else {
-		ipfsSt, err = state.LoadFromHash(stHash, s)
+	if ipnsHash != "" {
+		stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to load state from IPFS")
+			// TODO: fix this to not use error text checking
+			if !strings.Contains(err.Error(), `no link named "interplanetary-game-system"`) {
+				return nil, errors.Wrap(err, "failed to request IPGS state under IPNS")
+			}
+		} else {
+			ipfsSt, err = state.LoadFromHash(stHash, s)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to load state from IPFS")
+			}
 		}
 	}
 
 	var curSt *state.State
-	if ipfsSt.LastUpdated.After(fsSt.LastUpdated.Time) {
-		log.Println("IPFS state is more fresh than the filesystem one")
-
-		curSt = ipfsSt
-	} else {
-		log.Println("filesystem state is at least as fresh as the IPFS one")
+	if ipfsSt == nil || fsSt.LastUpdated.After(ipfsSt.LastUpdated.Time) {
+		log.Println("filesystem state is more fresh than the IPFS one")
 
 		plDir := filepath.Join(stDir, "players")
 		pfiles, err := ioutil.ReadDir(plDir)
@@ -210,9 +209,17 @@ func loadLatestState(
 		fsSt.IdentityHash = identHash
 
 		curSt = fsSt
+	} else {
+		log.Println("IPFS state is at least as fresh as the filesystem one")
+
+		curSt = ipfsSt
 	}
 
 	curSt.IdentityFile = filepath.Join(nodeDir, IdentityFilename)
+
+	if ipfsSt == nil {
+		curSt.Publish(nodeDir, cfg, s)
+	}
 
 	return curSt, nil
 }
