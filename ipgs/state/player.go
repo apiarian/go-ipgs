@@ -4,97 +4,177 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
-	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/pkg/errors"
 	"goji.io"
-	"goji.io/pat"
 	"golang.org/x/net/context"
 )
 
-// Player describes the state of an IPGS player
+const (
+	AuthorPublicKeyLinkName = "author-public-key"
+	PlayerPublicKeyLinkName = "player-public-key"
+)
+
 type Player struct {
-	// PublicKeyHash is the IPFS hash of the player's IPGS identity file
-	PublicKeyHash string
-
-	// PreviousVersionHash is the IPFS hash of the previous version of this player's
-	// state information. This can be used to follow committed changes to the
-	// state over time.
-	PreviousVersionHash string
-
-	// LastUpdated is the timestamp of the last change to this player's state
-	Timestamp IPGSTime
-
-	// Name is the human-friendly name of the player
-	Name string
-
-	// Nodes is a list of IPFS node IDs
-	Nodes []string
-
-	// Flags is a map of string keys corresponding to various behaviors a player
-	// may exhibit (usually negative things, like not signing games or toxic
-	// comments) and their count.
-	Flags map[string]int
+	Timestamp  time.Time
+	Name       string
+	Flags      map[string]int
+	Key        *PublicKey
+	PrivateKey *PrivateKey
+	Nodes      []string
 }
 
-// ipfsPlayer is the ipfs object data form of the player, the PublicKeyHash and
-// PreviousVersionHash strings are stored as ipfs object links instead of data
+type filePlayer struct {
+	Timestamp IPGSTime
+	Name      string
+	Flags     map[string]int
+	Key       *PublicKey
+	Nodes     []string
+}
+
+func (p *Player) filePlayer() *filePlayer {
+	return &filePlayer{
+		Timestamp: IPGSTime{p.Timestamp},
+		Name:      p.Name,
+		Flags:     p.Flags,
+		Key:       p.Key,
+		Nodes:     p.Nodes,
+	}
+}
+
+func (p *Player) fromFilePlayer(fp *filePlayer) {
+	p.Timestamp = fp.Timestamp.Time
+	p.Name = fp.Name
+	p.Flags = fp.Flags
+	p.Key = fp.Key
+	p.Nodes = fp.Nodes
+}
+
+func (p *Player) Write(out io.Writer) error {
+	fp := p.filePlayer()
+	err := json.NewEncoder(out).Encode(fp)
+	if err != nil {
+		return errors.Wrap(err, "failed to encode player")
+	}
+
+	return nil
+}
+
+func ReadPlayer(in io.Reader) (*Player, error) {
+	var fp *filePlayer
+	err := json.NewDecoder(in).Decode(&fp)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode player")
+	}
+
+	p := &Player{}
+
+	p.fromFilePlayer(fp)
+
+	return p, nil
+}
+
 type ipfsPlayer struct {
 	Timestamp IPGSTime
 	Name      string
-	Nodes     []string
 	Flags     map[string]int
+	Nodes     []string
 }
 
 func (p *Player) ipfsPlayer() *ipfsPlayer {
 	return &ipfsPlayer{
-		Timestamp: p.Timestamp,
+		Timestamp: IPGSTime{p.Timestamp},
 		Name:      p.Name,
-		Nodes:     p.Nodes,
 		Flags:     p.Flags,
+		Nodes:     p.Nodes,
 	}
 }
 
-func (p *Player) CreateIPFSObject(s *cachedshell.Shell, identHash string) (string, error) {
+func (p *Player) fromIpfsPlayer(ip *ipfsPlayer) {
+	p = &Player{
+		Timestamp: ip.Timestamp.Time,
+		Name:      ip.Name,
+		Flags:     ip.Flags,
+		Nodes:     ip.Nodes,
+	}
+}
+
+func (p *Player) Publish(s *cachedshell.Shell, author *Player) (string, error) {
 	j, err := json.Marshal(p.ipfsPlayer())
 	if err != nil {
 		return "", errors.Wrap(err, "failed to marshal player to JSON")
 	}
 
-	pHash, err := s.NewObject("")
+	h, err := s.NewObject("")
 	if err != nil {
-		return "", errors.Wrap(err, "failed to create player object")
+		return "", errors.Wrap(err, "failed to create empty player object")
 	}
 
-	pHash, err = s.PatchData(pHash, true, string(j))
+	h, err = s.PatchData(h, true, string(j))
 	if err != nil {
-		return "", errors.Wrap(err, "failed putd data in player object")
+		return "", errors.Wrap(err, "failed to add data to player object")
 	}
 
-	pHash, err = s.PatchLink(pHash, "author-public-key", identHash, false)
+	authorKeyHash, err := author.Key.Publish(s)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to add author-public-key link to player")
+		return "", errors.Wrap(err, "failed to publish author public key")
 	}
 
-	pHash, err = s.PatchLink(pHash, "player-public-key", p.PublicKeyHash, false)
+	playerKeyHash, err := p.Key.Publish(s)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to add player-public-key link to player")
+		return "", errors.Wrap(err, "failed to publish player public key")
 	}
 
-	if p.PreviousVersionHash != "" {
-		pHash, err = s.PatchLink(pHash, "previous-version", p.PreviousVersionHash, false)
-		if err != nil {
-			return "", errors.Wrap(err, "failed to add previous-version link to player")
+	h, err = s.PatchLink(h, AuthorPublicKeyLinkName, authorKeyHash, false)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to add author key link to player object")
+	}
+
+	h, err = s.PatchLink(h, PlayerPublicKeyLinkName, playerKeyHash, false)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to add player key link to player object")
+	}
+
+	return h, nil
+}
+
+func (p *Player) Get(h string, s *cachedshell.Shell) (string, error) {
+	obj, err := s.ObjectGet(h)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to get player object")
+	}
+
+	var ip *ipfsPlayer
+	err = json.Unmarshal([]byte(obj.Data), &ip)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to unmarshal player JSON")
+	}
+
+	p.fromIpfsPlayer(ip)
+
+	var authorKeyHash string
+
+	for _, l := range obj.Links {
+		switch l.Name {
+
+		case AuthorPublicKeyLinkName:
+			authorKeyHash = l.Hash
+
+		case PlayerPublicKeyLinkName:
+			err = p.Key.Get(l.Hash, s)
+			if err != nil {
+				return "", errors.Wrap(err, "failed to get public key")
+			}
+
 		}
 	}
 
-	return pHash, nil
+	return authorKeyHash, nil
 }
 
 type playersPOSTformat struct {
@@ -144,125 +224,115 @@ func MakePlayersGetHandler(
 	}
 }
 
-func MakePlayersGetOneHandler(
-	st *State,
-	mx *sync.Mutex,
-) goji.HandlerFunc {
-	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
+// func MakePlayersGetOneHandler(
+// 	st *State,
+// 	mx *sync.Mutex,
+// ) goji.HandlerFunc {
+// 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+// 		mx.Lock()
+// 		defer mx.Unlock()
+//
+// 		playerID := pat.Param(ctx, "id")
+//
+// 		player, ok := st.Players[playerID]
+//
+// 		if !ok {
+// 			WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
+// 			return
+// 		}
+//
+// 		WriteJSON(w, player, http.StatusOK)
+// 	}
+// }
 
-		playerID := pat.Param(ctx, "id")
-
-		player, ok := st.Players[playerID]
-
-		if !ok {
-			WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
-			return
-		}
-
-		WriteJSON(w, player, http.StatusOK)
-	}
-}
-
-func MakePlayersPostHandler(
-	nodeDir string,
-	cfg config.Config,
-	s *cachedshell.Shell,
-	st *State,
-	mx *sync.Mutex,
-) goji.HandlerFunc {
-	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
-
-		body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			WriteError(
-				w,
-				errors.Wrap(err, "failed to read POST body"),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-		if err = r.Body.Close(); err != nil {
-			WriteError(
-				w,
-				errors.Wrap(err, "failed to close POST body"),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		var postedPlayers playersPOSTformat
-		err = json.Unmarshal(body, &postedPlayers)
-		if err != nil || len(postedPlayers.Nodes) == 0 {
-			WriteError(
-				w,
-				errors.Wrap(
-					err,
-					`expected data format: {"Nodes":["node-id-1","node-id-2"]}`,
-				),
-				http.StatusBadRequest,
-			)
-			return
-		}
-
-		for _, pn := range postedPlayers.Nodes {
-			ipnsHash, err := s.Resolve(fmt.Sprintf("/ipns/%s", pn))
-			if err != nil {
-				WriteError(
-					w,
-					errors.Wrapf(err, "could not resolve %s", pn),
-					http.StatusNotFound,
-				)
-				return
-			}
-
-			stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
-			if err != nil {
-				WriteError(
-					w,
-					errors.Wrapf(err, "could not find IPFS object under node %s", pn),
-					http.StatusNotFound,
-				)
-				return
-			}
-
-			remoteSt, err := LoadFromHash(stHash, s)
-			if err != nil {
-				WriteError(
-					w,
-					errors.Wrapf(err, "could not load IPGS object for node %s", pn),
-					http.StatusInternalServerError,
-				)
-				return
-			}
-
-			p, ok := remoteSt.Players[remoteSt.IdentityHash]
-			if !ok {
-				WriteError(
-					w,
-					errors.Wrapf(err, "could not find player's object for node %s", pn),
-					http.StatusInternalServerError,
-				)
-				return
-			}
-
-			st.Players[p.PublicKeyHash] = p
-			st.LastUpdated = IPGSTime{time.Now()}
-		}
-
-		err = st.Publish(nodeDir, cfg, s)
-		if err != nil {
-			WriteError(
-				w,
-				errors.Wrap(err, "could not publish updated state"),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		w.WriteHeader(http.StatusCreated)
-	}
-}
+// func MakePlayersPostHandler(
+// 	nodeDir string,
+// 	cfg config.Config,
+// 	s *cachedshell.Shell,
+// 	st *State,
+// 	mx *sync.Mutex,
+// ) goji.HandlerFunc {
+// 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+// 		mx.Lock()
+// 		defer mx.Unlock()
+//
+// 		body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
+// 		if err != nil {
+// 			WriteError(
+// 				w,
+// 				errors.Wrap(err, "failed to read POST body"),
+// 				http.StatusInternalServerError,
+// 			)
+// 			return
+// 		}
+// 		if err = r.Body.Close(); err != nil {
+// 			WriteError(
+// 				w,
+// 				errors.Wrap(err, "failed to close POST body"),
+// 				http.StatusInternalServerError,
+// 			)
+// 			return
+// 		}
+//
+// 		var postedPlayers playersPOSTformat
+// 		err = json.Unmarshal(body, &postedPlayers)
+// 		if err != nil || len(postedPlayers.Nodes) == 0 {
+// 			WriteError(
+// 				w,
+// 				errors.Wrap(
+// 					err,
+// 					`expected data format: {"Nodes":["node-id-1","node-id-2"]}`,
+// 				),
+// 				http.StatusBadRequest,
+// 			)
+// 			return
+// 		}
+//
+// 		for _, pn := range postedPlayers.Nodes {
+// 			stHash, err := util.FindIpgsHash(pn, s)
+// 			if err != nil {
+// 				WriteError(
+// 					w,
+// 					errors.Wrapf(err, "could not find IPGS object for node %s", pn),
+// 					http.StatusNotFound,
+// 				)
+// 				return
+// 			}
+//
+// 			remoteSt, err := LoadFromHash(stHash, s)
+// 			if err != nil {
+// 				WriteError(
+// 					w,
+// 					errors.Wrapf(err, "could not load IPGS object for node %s", pn),
+// 					http.StatusInternalServerError,
+// 				)
+// 				return
+// 			}
+//
+// 			p, ok := remoteSt.Players[remoteSt.IdentityHash]
+// 			if !ok {
+// 				WriteError(
+// 					w,
+// 					errors.Wrapf(err, "could not find player's object for node %s", pn),
+// 					http.StatusInternalServerError,
+// 				)
+// 				return
+// 			}
+//
+// 			st.Players[p.PublicKeyHash] = p
+// 			st.LastUpdated = IPGSTime{time.Now()}
+// 		}
+//
+// 		err = st.Publish(nodeDir, cfg, s)
+// 		if err != nil {
+// 			WriteError(
+// 				w,
+// 				errors.Wrap(err, "could not publish updated state"),
+// 				http.StatusInternalServerError,
+// 			)
+// 			return
+// 		}
+//
+// 		w.WriteHeader(http.StatusCreated)
+// 	}
+// }

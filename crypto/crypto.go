@@ -78,7 +78,7 @@ func NewPrivateKey() (*PrivateKey, error) {
 // encoding is used, storing the private key D value in one block and the
 // public key in a second. The public key is written using the WritePublicKey
 // function. The pem headers include the curve name for future-proofing.
-func WritePrivateKey(k *PrivateKey, out io.Writer) error {
+func (k *PrivateKey) Write(out io.Writer) error {
 	priv := &pem.Block{
 		Type: PrivateKeyPEMType,
 		Headers: map[string]string{
@@ -94,7 +94,7 @@ func WritePrivateKey(k *PrivateKey, out io.Writer) error {
 		return errors.Wrap(err, "failed to encode private key")
 	}
 
-	return WritePublicKey(k.GetPublicKey(), out)
+	return k.GetPublicKey().Write(out)
 }
 
 // WritePublicKey encodes the public key to the output Writer. The pem encoding
@@ -103,7 +103,7 @@ func WritePrivateKey(k *PrivateKey, out io.Writer) error {
 // future-proofing. If you are writing a public key separately from a
 // crypto.PrivateKey, use the privateKey.GetPublicKey() method instead of
 // pulling PublicKey field directly from the privateKey.
-func WritePublicKey(k *PublicKey, out io.Writer) error {
+func (k *PublicKey) Write(out io.Writer) error {
 	pub := &pem.Block{
 		Type: PublicKeyPEMType,
 		Headers: map[string]string{

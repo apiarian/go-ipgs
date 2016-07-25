@@ -150,7 +150,7 @@ func TestReadWrite(t *testing.T) {
 		k.Comment = "hello world"
 
 		var b bytes.Buffer
-		err = WritePrivateKey(k, &b)
+		err = k.Write(&b)
 		fatalIfErr(t, "failed to write bytes", err)
 
 		t.Logf("written private key:\n%s", b.String())
@@ -161,7 +161,7 @@ func TestReadWrite(t *testing.T) {
 		checkKeyEquality(t, k, kPrime)
 
 		var bPub bytes.Buffer
-		err = WritePublicKey(k.GetPublicKey(), &bPub)
+		err = k.GetPublicKey().Write(&bPub)
 		fatalIfErr(t, "failed to write bytes", err)
 
 		t.Logf("written public key:\n%s", bPub.String())
@@ -180,7 +180,7 @@ func TestReadWrite(t *testing.T) {
 		}
 
 		b.Reset()
-		err = WritePrivateKey(k, &b)
+		err = k.Write(&b)
 		fatalIfErr(t, "failed to write private key again", err)
 
 		kPub2, err := ReadPublicKey(&b)
@@ -189,7 +189,7 @@ func TestReadWrite(t *testing.T) {
 		checkKeyEquality(t, k.GetPublicKey(), kPub2)
 
 		bPub.Reset()
-		err = WritePublicKey(k.GetPublicKey(), &bPub)
+		err = k.GetPublicKey().Write(&bPub)
 		fatalIfErr(t, "failed to write public key again", err)
 
 		kNone, err := ReadPrivateKey(&bPub)

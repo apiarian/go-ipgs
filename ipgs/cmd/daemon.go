@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/apiarian/go-ipgs/cache"
 	"github.com/apiarian/go-ipgs/cachedshell"
@@ -90,6 +91,8 @@ to quickly create a Cobra application.`,
 		mx = &sync.Mutex{}
 
 		log.Printf("initial state: %+v\n", st)
+
+		go periodicallyUpdateState(nodeDir, cfg, s, st, mx)
 
 		root := goji.NewMux()
 		players := goji.SubMux()
@@ -222,4 +225,59 @@ func loadLatestState(
 	}
 
 	return curSt, nil
+}
+
+func periodicallyUpdateState(
+	nodeDir string,
+	cfg config.Config,
+	s *cachedshell.Shell,
+	st *state.State,
+	mx *sync.Mutex,
+) {
+	for {
+		updateState(nodeDir, cfg, s, st, mx)
+
+		log.Println("sleeping for 5 seconds")
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func updateState(
+	nodeDir string,
+	cfg config.Config,
+	s *cachedshell.Shell,
+	st *state.State,
+	mx *sync.Mutex,
+) {
+	mx.Lock()
+	defer mx.Unlock()
+
+	log.Println("updating state")
+
+	for h, p := range st.Players {
+		if h == st.IdentityHash {
+			continue
+		}
+
+		var pState *state.State
+		for _, n := range p.Nodes {
+			stHash, err := util.FindIpgsHash(n, s)
+			if err != nil {
+				log.Printf("could not find IPGS state for player %s: %+v\n", h, err)
+				continue
+			}
+
+			state, err := state.LoadFromHash(stHash, s)
+			if err != nil {
+				log.Printf("could not load IPGS state for player %s: %+v\n", h, err)
+				continue
+			}
+
+			if pState == nil || state.LastUpdated.After(pState.LastUpdated.Time) {
+				pState = state
+			}
+		}
+
+		log.Printf("latest state for player %s: %+v\n", h, pState)
+	}
 }
