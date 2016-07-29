@@ -88,7 +88,8 @@ func (k *PublicKey) Get(h string, s *cachedshell.Shell) error {
 		return errors.Wrap(err, "failed to read key")
 	}
 
-	k = &PublicKey{pk, h}
+	k.PublicKey = pk
+	k.Hash = h
 
 	return nil
 }

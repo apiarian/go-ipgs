@@ -29,6 +29,12 @@ type Player struct {
 	Nodes      []string
 }
 
+func NewPlayer() *Player {
+	return &Player{
+		Flags: make(map[string]int),
+	}
+}
+
 type filePlayer struct {
 	Timestamp IPGSTime
 	Name      string
@@ -65,18 +71,16 @@ func (p *Player) Write(out io.Writer) error {
 	return nil
 }
 
-func ReadPlayer(in io.Reader) (*Player, error) {
+func (p *Player) Read(in io.Reader) error {
 	var fp *filePlayer
 	err := json.NewDecoder(in).Decode(&fp)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to decode player")
+		return errors.Wrap(err, "failed to decode player")
 	}
-
-	p := &Player{}
 
 	p.fromFilePlayer(fp)
 
-	return p, nil
+	return nil
 }
 
 type ipfsPlayer struct {

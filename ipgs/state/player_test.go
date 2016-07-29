@@ -33,7 +33,8 @@ func TestPlayerReadWrite(t *testing.T) {
 
 	t.Logf("written: %s\n", b.String())
 
-	l, err := ReadPlayer(b)
+	l := &Player{}
+	err = l.Read(b)
 	fatalIfErr(t, "read player from buffer", err)
 
 	t.Logf("loaded: %+v\n", l)

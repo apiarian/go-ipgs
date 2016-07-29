@@ -32,11 +32,11 @@ func NewState() *State {
 }
 
 func (st *State) LastUpdatedString() string {
-	return st.LastUpdated.UTC().Format(time.RFC3339)
+	return st.LastUpdated.UTC().Format(time.RFC3339Nano)
 }
 
 func (st *State) ParseLastUpdated(s string) error {
-	t, err := time.ParseInLocation(time.RFC3339, s, nil)
+	t, err := time.ParseInLocation(time.RFC3339Nano, s, nil)
 	if err != nil {
 		return errors.Wrapf(err, "could not parse string '%s'", s)
 	}
@@ -74,11 +74,27 @@ func (st *State) Write(nodeDir string) error {
 		return errors.Wrap(err, "failed to create players directory")
 	}
 
+	f, err := os.Create(
+		filepath.Join(
+			pls,
+			"player-000.json",
+		),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to create owner file")
+	}
+	defer f.Close()
+
+	err = st.Owner.Write(f)
+	if err != nil {
+		return errors.Wrap(err, "failed to write owner to file")
+	}
+
 	for i, p := range st.Players {
 		f, err := os.Create(
 			filepath.Join(
 				pls,
-				fmt.Sprintf("player-%03d.json", i),
+				fmt.Sprintf("player-%03d.json", i+1),
 			),
 		)
 		if err != nil {
@@ -107,11 +123,9 @@ func (st *State) Write(nodeDir string) error {
 }
 
 func (st *State) Read(nodeDir string) error {
-	st = NewState()
-
 	dir := filepath.Join(nodeDir, StateDirectoryName)
 
-	pkFile, err := os.Open(filepath.Join(dir, PrivateKeyFileName))
+	pkFile, err := os.Open(filepath.Join(nodeDir, PrivateKeyFileName))
 	if err != nil {
 		return errors.Wrap(err, "failed to open private key file")
 	}
@@ -147,7 +161,8 @@ func (st *State) Read(nodeDir string) error {
 		}
 		defer plF.Close()
 
-		p, err := ReadPlayer(plF)
+		p := &Player{}
+		err = p.Read(plF)
 		if err != nil {
 			return errors.Wrap(err, "failed to read player from file")
 		}
