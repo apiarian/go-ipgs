@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apiarian/go-ipgs/cache"
+	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/apiarian/go-ipgs/crypto"
+	"github.com/whyrusleeping/iptb/util"
 )
 
 func TestPlayerReadWrite(t *testing.T) {
@@ -66,4 +69,21 @@ func TestPlayerReadWrite(t *testing.T) {
 	if l.PrivateKey != nil {
 		t.Fatal("loaded player somehow has a private key")
 	}
+}
+
+func TestPlayerPublishGet(t *testing.T) {
+	node, err := iptbutil.LoadNodeN(0)
+	fatalIfErr(t, "failed to load node 0", err)
+
+	addr, err := node.APIAddr()
+	fatalIfErr(t, "failed to get node api address", err)
+	t.Log("node API address:", addr)
+
+	c := cache.NewCache()
+	s := cachedshell.NewShell(addr, c)
+	nodeid, err := s.ID()
+	fatalIfErr(t, "failed to connect to ipfs node", err)
+	t.Logf("node id: %+v\n", nodeid)
+
+	t.Fatal("bump")
 }
