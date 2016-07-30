@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/pkg/errors"
 )
 
@@ -84,19 +83,4 @@ func FatalIfErr(note string, err error) {
 	if err != nil {
 		log.Fatalf("failed to %v: %+v\n", note, err)
 	}
-}
-
-// FindIpgsHash looks for an IPGS state structure under a node's IPNS root
-func FindIpgsHash(nodeId string, s *cachedshell.Shell) (string, error) {
-	ipfsHash, err := s.Resolve(fmt.Sprintf("/ipns/%s", nodeId))
-	if err != nil {
-		return "", errors.Wrapf(err, "could not resolve %s", nodeId)
-	}
-
-	stateHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipfsHash))
-	if err != nil {
-		return "", errors.Wrapf(err, "no IPGS object for node %s", nodeId)
-	}
-
-	return stateHash, nil
 }

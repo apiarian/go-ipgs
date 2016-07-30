@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	StateLinkName        = "interplanetary-game-system"
 	IdentityLinkName     = "identity.pem"
 	PlayersLinkName      = "players"
 	LastUpdatedFileName  = "last-updated"

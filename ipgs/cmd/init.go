@@ -40,15 +40,6 @@ import (
 	ipfs_config "github.com/ipfs/go-ipfs/repo/config"
 )
 
-const (
-	// PrivateKeyFilename is the filename of the IPGS private key file under the
-	// node directory
-	PrivateKeyFilename = "private.pem"
-	// IdentityFilename is the filename of the IPGS public key file under the
-	// node directory
-	IdentityFilename = "identity.pem"
-)
-
 // initCmd represents the init command
 var initCmd = &cobra.Command{
 	Use:   "init",
@@ -232,7 +223,7 @@ func initCrypto(nodeDir string) error {
 		k.Comment = c
 	}
 
-	f, err := os.Create(filepath.Join(nodeDir, PrivateKeyFilename))
+	f, err := os.Create(filepath.Join(nodeDir, state.PrivateKeyFileName))
 	if err != nil {
 		return errors.Wrap(err, "failed to create private key file")
 	}
@@ -243,7 +234,7 @@ func initCrypto(nodeDir string) error {
 		return errors.Wrap(err, "failed to set private key file to user r/w only")
 	}
 
-	err = crypto.WritePrivateKey(k, f)
+	err = k.Write(f)
 	if err != nil {
 		return errors.Wrap(err, "failed to write private key to file")
 	}
@@ -251,101 +242,6 @@ func initCrypto(nodeDir string) error {
 	err = f.Chmod(0400)
 	if err != nil {
 		return errors.Wrap(err, "failed to set private key file to user read-only")
-	}
-
-	return nil
-}
-
-func bootstrapState(nodeDir string, cfg config.Config) error {
-	// write the identity file to the node directory, not the state since it
-	// won't be changing for the life of the node and we don't need to keep
-	// copying and moving it around when we do our state dance
-	err := writeIdentityFile(nodeDir)
-	if err != nil {
-		return errors.Wrap(err, "could not write identity file")
-	}
-
-	c := cache.NewCache()
-	s, err := common.MakeIpfsShell(cfg, c)
-	if err != nil {
-		return errors.Wrap(err, "could not create IPFS shell")
-	}
-
-	pubKeyHash, err := s.AddPermanentFile(filepath.Join(nodeDir, IdentityFilename))
-	if err != nil {
-		return errors.Wrap(err, "could not add identity file permanently")
-	}
-
-	privFile, err := os.Open(filepath.Join(nodeDir, PrivateKeyFilename))
-	if err != nil {
-		return errors.Wrap(err, "failed to open private key file")
-	}
-
-	k, err := crypto.ReadPublicKey(privFile)
-	if err != nil {
-		return errors.Wrap(err, "failed to read the public key")
-	}
-
-	name, err := util.GetStringForPrompt(
-		"player name",
-		k.Name,
-	)
-	if err != nil {
-		return errors.Errorf("could not get player name from user")
-	}
-
-	nodeId, err := s.ID()
-	if err != nil {
-		return errors.Wrap(err, "failed to read ID from IPFS node")
-	}
-	nodesStr, err := util.GetStringForPrompt(
-		"IPFS backing nodes (comma separated list of IDs)",
-		nodeId.ID,
-	)
-	nodes := strings.Split(nodesStr, ",")
-
-	player := &state.Player{
-		PublicKeyHash:       pubKeyHash,
-		PreviousVersionHash: "",
-		Timestamp:           state.IPGSTime{time.Now()},
-		Name:                name,
-		Nodes:               nodes,
-	}
-
-	st := state.NewState()
-	st.IdentityFile = filepath.Join(nodeDir, IdentityFilename)
-	st.LastUpdated = state.IPGSTime{time.Now()}
-	st.Players[player.PublicKeyHash] = player
-
-	err = st.Publish(nodeDir, cfg, s)
-	if err != nil {
-		return errors.Wrap(err, "could not publish initial state")
-	}
-
-	return nil
-}
-
-func writeIdentityFile(nodeDir string) error {
-	f, err := os.Open(filepath.Join(nodeDir, PrivateKeyFilename))
-	if err != nil {
-		return errors.Wrap(err, "failed to open private key file")
-	}
-	defer f.Close()
-
-	k, err := crypto.ReadPrivateKey(f)
-	if err != nil {
-		return errors.Wrap(err, "failed to read private key file")
-	}
-
-	pubF, err := os.Create(filepath.Join(nodeDir, IdentityFilename))
-	if err != nil {
-		return errors.Wrap(err, "failed to create public key file")
-	}
-	defer pubF.Close()
-
-	err = crypto.WritePublicKey(k.GetPublicKey(), pubF)
-	if err != nil {
-		return errors.Wrap(err, "failed to write the public key")
 	}
 
 	return nil
@@ -376,4 +272,71 @@ func getIpgsConfig() (config.IpgsConfig, error) {
 	c.APIPort = requestedPort
 
 	return c, nil
+}
+
+func bootstrapState(nodeDir string, cfg config.Config) error {
+	s, err := common.MakeIpfsShell(cfg, cache.NewCache())
+	if err != nil {
+		return errors.Wrap(err, "could not create IPFS shell")
+	}
+
+	privFile, err := os.Open(filepath.Join(nodeDir, state.PrivateKeyFileName))
+	if err != nil {
+		return errors.Wrap(err, "failed to open private key file")
+	}
+	defer privFile.Close()
+
+	k, err := crypto.ReadPrivateKey(privFile)
+	if err != nil {
+		return errors.Wrap(err, "failed to read the private key")
+	}
+
+	name, err := util.GetStringForPrompt(
+		"player name",
+		k.Name,
+	)
+	if err != nil {
+		return errors.Errorf("could not get player name from user")
+	}
+
+	nodeId, err := s.ID()
+	if err != nil {
+		return errors.Wrap(err, "failed to read ID from IPFS node")
+	}
+	nodesStr, err := util.GetStringForPrompt(
+		"IPFS backing nodes (comma separated list of IDs)",
+		nodeId.ID,
+	)
+	nodes := strings.Split(nodesStr, ",")
+
+	owner := state.NewPlayer(
+		state.NewPublicKey(k.GetPublicKey(), ""),
+		state.NewPrivateKey(k),
+	)
+	owner.Timestamp = time.Now()
+	owner.Name = name
+	owner.Nodes = nodes
+
+	st := state.NewState()
+	st.Owner = owner
+	st.LastUpdated = time.Now()
+
+	err = st.Write(nodeDir)
+	if err != nil {
+		return errors.Wrap(err, "failed to write initial state")
+	}
+
+	h, err := st.Publish(s)
+	if err != nil {
+		return errors.Wrap(err, "failed to publish initial state")
+	}
+
+	h, err = common.InstallIpgsStateHash(h, s, cfg.IPGS.UnpinIPNS)
+	if err != nil {
+		return errors.Wrap(err, "failed to install initial IPGS state")
+	}
+
+	log.Println("published IPGS state to", h)
+
+	return nil
 }

@@ -21,13 +21,10 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -98,27 +95,22 @@ to quickly create a Cobra application.`,
 		players := goji.SubMux()
 		root.HandleC(pat.New("/players/*"), players)
 
-		players.HandleFuncC(
-			pat.Get("/:id"),
-			state.MakePlayersGetOneHandler(st, mx),
-		)
+		//players.HandleFuncC(
+		//	pat.Get("/:id"),
+		//	state.MakePlayersGetOneHandler(st, mx),
+		//)
 		players.HandleFuncC(
 			pat.Get("/"),
 			state.MakePlayersGetHandler(st, mx),
 		)
-		players.HandleFuncC(
-			pat.Post("/"),
-			state.MakePlayersPostHandler(nodeDir, cfg, s, st, mx),
-		)
+		//players.HandleFuncC(
+		//	pat.Post("/"),
+		//	state.MakePlayersPostHandler(nodeDir, cfg, s, st, mx),
+		//)
 
 		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
 		log.Println("HTTP API starting at", addr)
 		log.Fatal(http.ListenAndServe(addr, root))
-
-		// st.LastUpdated = state.IPGSTime{time.Now()}
-
-		// err = st.Publish(nodeDir, cfg, s)
-		// util.FatalIfErr("publish state", err)
 	},
 }
 
@@ -142,86 +134,49 @@ func loadLatestState(
 	cfg config.Config,
 	s *cachedshell.Shell,
 ) (*state.State, error) {
-	stDir := filepath.Join(nodeDir, "state")
-
 	fsSt := state.NewState()
-
-	fsLastUpdated, err := ioutil.ReadFile(filepath.Join(stDir, "last-updated"))
+	err := fsSt.Read(nodeDir)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read last-updated from file")
+		return nil, errors.Wrap(err, "failed to load read state from file system")
 	}
-	err = fsSt.LastUpdatedFromInput(string(fsLastUpdated))
+
+	ipfsSt := state.NewState()
+
+	ipfsStHash, err := common.FindIpgsHash("", s)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to process last-updated from file")
-	}
-
-	var ipfsSt *state.State
-
-	ipnsHash, err := s.Resolve("")
-	// TODO: I really wish we had more actionable error messages in go-ipfs-api
-	if err != nil && !strings.HasSuffix(err.Error(), "Could not resolve name.") {
-		return nil, errors.Wrap(err, "failed to resolve nodes's IPNS")
-	}
-
-	if ipnsHash != "" {
-		stHash, err := s.ResolvePath(fmt.Sprintf("%s/interplanetary-game-system", ipnsHash))
+		log.Printf("failed to find IPGS state in IPFS: %+v\n", err)
+	} else {
+		err := ipfsSt.Get(ipfsStHash, s)
 		if err != nil {
-			// TODO: fix this to not use error text checking
-			if !strings.Contains(err.Error(), `no link named "interplanetary-game-system"`) {
-				return nil, errors.Wrap(err, "failed to request IPGS state under IPNS")
-			}
-		} else {
-			ipfsSt, err = state.LoadFromHash(stHash, s)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to load state from IPFS")
-			}
+			log.Printf("failed to load IPGS state from IPFS: %+v\n", err)
 		}
 	}
 
 	var curSt *state.State
-	if ipfsSt == nil || fsSt.LastUpdated.After(ipfsSt.LastUpdated.Time) {
-		log.Println("filesystem state is more fresh than the IPFS one")
 
-		plDir := filepath.Join(stDir, "players")
-		pfiles, err := ioutil.ReadDir(plDir)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to read the players directory")
-		}
-
-		for _, pf := range pfiles {
-			pb, err := ioutil.ReadFile(filepath.Join(plDir, pf.Name()))
-			if err != nil {
-				return nil, errors.Wrap(err, "faild to read player file")
-			}
-
-			var p *state.Player
-			err = json.Unmarshal(pb, &p)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to unmarshal player JSON")
-			}
-
-			fsSt.Players[p.PublicKeyHash] = p
-
-		}
-
-		identHash, err := s.AddPermanentFile(filepath.Join(nodeDir, IdentityFilename))
-		if err != nil {
-			return nil, errors.Wrap(err, "could not get the hash of the identity file")
-		}
-
-		fsSt.IdentityHash = identHash
-
-		curSt = fsSt
-	} else {
-		log.Println("IPFS state is at least as fresh as the filesystem one")
+	if ipfsSt.LastUpdated.After(fsSt.LastUpdated) {
+		log.Println("IPFS state is more fresh than the filesystem one")
 
 		curSt = ipfsSt
-	}
 
-	curSt.IdentityFile = filepath.Join(nodeDir, IdentityFilename)
+		err := curSt.Owner.AddPrivateKey(fsSt.Owner.PrivateKey())
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to add private key to owner")
+		}
 
-	if ipfsSt == nil {
-		curSt.Publish(nodeDir, cfg, s)
+		err = curSt.Write(nodeDir)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to write newer IPFS state to filesystem")
+		}
+	} else {
+		log.Println("filesystem state is at least as fresh as the IPFS one")
+
+		curSt = fsSt
+
+		h, err := curSt.Publish(s)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to publish state to IPFS")
+		}
 	}
 
 	return curSt, nil
@@ -254,30 +209,26 @@ func updateState(
 
 	log.Println("updating state")
 
-	for h, p := range st.Players {
-		if h == st.IdentityHash {
-			continue
-		}
+	// for h, p := range st.Players {
+	// 	var pState *state.State
+	// 	for _, n := range p.Nodes {
+	// 		stHash, err := util.FindIpgsHash(n, s)
+	// 		if err != nil {
+	// 			log.Printf("could not find IPGS state for player %s: %+v\n", h, err)
+	// 			continue
+	// 		}
 
-		var pState *state.State
-		for _, n := range p.Nodes {
-			stHash, err := util.FindIpgsHash(n, s)
-			if err != nil {
-				log.Printf("could not find IPGS state for player %s: %+v\n", h, err)
-				continue
-			}
+	// 		state, err := state.LoadFromHash(stHash, s)
+	// 		if err != nil {
+	// 			log.Printf("could not load IPGS state for player %s: %+v\n", h, err)
+	// 			continue
+	// 		}
 
-			state, err := state.LoadFromHash(stHash, s)
-			if err != nil {
-				log.Printf("could not load IPGS state for player %s: %+v\n", h, err)
-				continue
-			}
+	// 		if pState == nil || state.LastUpdated.After(pState.LastUpdated.Time) {
+	// 			pState = state
+	// 		}
+	// 	}
 
-			if pState == nil || state.LastUpdated.After(pState.LastUpdated.Time) {
-				pState = state
-			}
-		}
-
-		log.Printf("latest state for player %s: %+v\n", h, pState)
-	}
+	// 	log.Printf("latest state for player %s: %+v\n", h, pState)
+	// }
 }

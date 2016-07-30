@@ -45,6 +45,25 @@ func (p *Player) PrivateKey() *PrivateKey {
 	return p.privateKey
 }
 
+func (p *Player) AddPrivateKey(k *PrivateKey) error {
+	if p.privateKey != nil {
+		return errors.New("cannot replace existing private key")
+	}
+
+	if p.publicKey == nil {
+		return errors.New("cannot add a private key without a public key in place")
+	}
+
+	pub := NewPublicKey(k.Key().GetPublicKey(), "")
+	if !p.publicKey.Equals(pub) {
+		return errors.New("existing public key does not match provided private key")
+	}
+
+	p.privateKey = k
+
+	return nil
+}
+
 type filePlayer struct {
 	Timestamp IPGSTime
 	Name      string
