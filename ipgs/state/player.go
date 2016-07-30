@@ -24,15 +24,25 @@ type Player struct {
 	Timestamp  time.Time
 	Name       string
 	Flags      map[string]int
-	Key        *PublicKey
-	PrivateKey *PrivateKey
 	Nodes      []string
+	publicKey  *PublicKey
+	privateKey *PrivateKey
 }
 
-func NewPlayer() *Player {
+func NewPlayer(pub *PublicKey, priv *PrivateKey) *Player {
 	return &Player{
-		Flags: make(map[string]int),
+		Flags:      make(map[string]int),
+		publicKey:  pub,
+		privateKey: priv,
 	}
+}
+
+func (p *Player) Key() *PublicKey {
+	return p.publicKey
+}
+
+func (p *Player) PrivateKey() *PrivateKey {
+	return p.privateKey
 }
 
 type filePlayer struct {
@@ -48,7 +58,7 @@ func (p *Player) filePlayer() *filePlayer {
 		Timestamp: IPGSTime{p.Timestamp},
 		Name:      p.Name,
 		Flags:     p.Flags,
-		Key:       p.Key,
+		Key:       p.Key(),
 		Nodes:     p.Nodes,
 	}
 }
@@ -57,8 +67,8 @@ func (p *Player) fromFilePlayer(fp *filePlayer) {
 	p.Timestamp = fp.Timestamp.Time
 	p.Name = fp.Name
 	p.Flags = fp.Flags
-	p.Key = fp.Key
 	p.Nodes = fp.Nodes
+	p.publicKey = fp.Key
 }
 
 func (p *Player) Write(out io.Writer) error {
@@ -100,12 +110,10 @@ func (p *Player) ipfsPlayer() *ipfsPlayer {
 }
 
 func (p *Player) fromIpfsPlayer(ip *ipfsPlayer) {
-	p = &Player{
-		Timestamp: ip.Timestamp.Time,
-		Name:      ip.Name,
-		Flags:     ip.Flags,
-		Nodes:     ip.Nodes,
-	}
+	p.Timestamp = ip.Timestamp.Time
+	p.Name = ip.Name
+	p.Flags = ip.Flags
+	p.Nodes = ip.Nodes
 }
 
 func (p *Player) Publish(s *cachedshell.Shell, author *Player) (string, error) {
@@ -124,12 +132,12 @@ func (p *Player) Publish(s *cachedshell.Shell, author *Player) (string, error) {
 		return "", errors.Wrap(err, "failed to add data to player object")
 	}
 
-	authorKeyHash, err := author.Key.Publish(s)
+	authorKeyHash, err := author.Key().Publish(s)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to publish author public key")
 	}
 
-	playerKeyHash, err := p.Key.Publish(s)
+	playerKeyHash, err := p.Key().Publish(s)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to publish player public key")
 	}
@@ -170,10 +178,12 @@ func (p *Player) Get(h string, s *cachedshell.Shell) (string, error) {
 			authorKeyHash = l.Hash
 
 		case PlayerPublicKeyLinkName:
-			err = p.Key.Get(l.Hash, s)
+			k := NewPublicKey(nil, "")
+			err := k.Get(l.Hash, s)
 			if err != nil {
 				return "", errors.Wrap(err, "failed to get public key")
 			}
+			p.publicKey = k
 
 		}
 	}

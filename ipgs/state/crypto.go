@@ -9,19 +9,44 @@ import (
 	"github.com/pkg/errors"
 )
 
-type PublicKey struct {
-	*crypto.PublicKey
-	Hash string
+type PrivateKey struct {
+	key *crypto.PrivateKey
 }
 
-type PrivateKey struct {
-	*crypto.PrivateKey
+func NewPrivateKey(k *crypto.PrivateKey) *PrivateKey {
+	return &PrivateKey{
+		key: k,
+	}
+}
+
+func (k *PrivateKey) Key() *crypto.PrivateKey {
+	return k.key
+}
+
+type PublicKey struct {
+	key  *crypto.PublicKey
+	hash string
+}
+
+func NewPublicKey(k *crypto.PublicKey, h string) *PublicKey {
+	return &PublicKey{
+		key:  k,
+		hash: h,
+	}
+}
+
+func (k *PublicKey) Key() *crypto.PublicKey {
+	return k.key
+}
+
+func (k *PublicKey) Hash() string {
+	return k.hash
 }
 
 func (k *PublicKey) MarshalJSON() ([]byte, error) {
 	b := bytes.NewBuffer(nil)
 
-	err := k.Write(b)
+	err := k.key.Write(b)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to write key to buffer")
 	}
@@ -49,19 +74,19 @@ func (k *PublicKey) UnmarshalJSON(d []byte) error {
 		return errors.Wrap(err, "failed to read key")
 	}
 
-	k.PublicKey = pk
+	k.key = pk
 
 	return nil
 }
 
 func (k *PublicKey) Publish(s *cachedshell.Shell) (string, error) {
-	if k.Hash != "" {
-		return k.Hash, nil
+	if k.hash != "" {
+		return k.hash, nil
 	}
 
 	b := bytes.NewBuffer(nil)
 
-	err := k.Write(b)
+	err := k.key.Write(b)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to write key to buffer")
 	}
@@ -71,7 +96,7 @@ func (k *PublicKey) Publish(s *cachedshell.Shell) (string, error) {
 		return "", errors.Wrap(err, "failed to add key buffer")
 	}
 
-	k.Hash = h
+	k.hash = h
 
 	return h, nil
 }
@@ -88,12 +113,14 @@ func (k *PublicKey) Get(h string, s *cachedshell.Shell) error {
 		return errors.Wrap(err, "failed to read key")
 	}
 
-	k.PublicKey = pk
-	k.Hash = h
+	k.key = pk
+	k.hash = h
 
 	return nil
 }
 
 func (k *PublicKey) Equals(o *PublicKey) bool {
-	return (k.Curve == o.Curve && k.X.Cmp(o.X) == 0 && k.Y.Cmp(o.Y) == 0)
+	k1 := k.key
+	k2 := o.key
+	return (k1.Curve == k2.Curve && k1.X.Cmp(k2.X) == 0 && k1.Y.Cmp(k2.Y) == 0)
 }

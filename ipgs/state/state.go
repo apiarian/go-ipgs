@@ -135,8 +135,8 @@ func (st *State) Read(nodeDir string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to read private key from file")
 	}
-	ownerPrvKey := &PrivateKey{pk}
-	ownerPubKey := &PublicKey{ownerPrvKey.GetPublicKey(), ""}
+	ownerPrvKey := NewPrivateKey(pk)
+	ownerPubKey := NewPublicKey(pk.GetPublicKey(), "")
 
 	d, err := ioutil.ReadFile(filepath.Join(dir, LastUpdatedFileName))
 	if err != nil {
@@ -161,18 +161,18 @@ func (st *State) Read(nodeDir string) error {
 		}
 		defer plF.Close()
 
-		p := &Player{}
+		p := NewPlayer(nil, nil)
 		err = p.Read(plF)
 		if err != nil {
 			return errors.Wrap(err, "failed to read player from file")
 		}
 
-		if p.Key.Equals(ownerPubKey) {
+		if p.Key().Equals(ownerPubKey) {
 			if st.Owner != nil {
 				return errors.Wrap(err, "found more than one player that could be the owner")
 			}
 
-			p.PrivateKey = ownerPrvKey
+			p.privateKey = ownerPrvKey
 
 			st.Owner = p
 		} else {
@@ -202,7 +202,7 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 		return "", errors.Wrap(err, "failed to publish owner")
 	}
 
-	ownerKeyHash, err := st.Owner.Key.Publish(s)
+	ownerKeyHash, err := st.Owner.Key().Publish(s)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to publish owner's key")
 	}
@@ -228,7 +228,7 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 			return "", errors.Wrap(err, "failed to publish player")
 		}
 
-		pkH, err := p.Key.Publish(s)
+		pkH, err := p.Key().Publish(s)
 		if err != nil {
 			return "", errors.Wrap(err, "failed to publish player's key")
 		}
@@ -248,8 +248,6 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 }
 
 func (st *State) Get(h string, s *cachedshell.Shell) error {
-	st = NewState()
-
 	obj, err := s.ObjectGet(h)
 	if err != nil {
 		return errors.Wrap(err, "failed to get state object")
@@ -277,14 +275,16 @@ func (st *State) Get(h string, s *cachedshell.Shell) error {
 
 	players := make([]*Player, len(pls.Links))
 	for i, l := range pls.Links {
-		_, err = players[i].Get(l.Hash, s)
+		p := NewPlayer(nil, nil)
+		_, err = p.Get(l.Hash, s)
 		if err != nil {
 			return errors.Wrap(err, "failed to load get player from hash")
 		}
+		players[i] = p
 	}
 
 	for _, p := range players {
-		if p.Key.Hash == identityHash {
+		if p.Key().Hash() == identityHash {
 			if st.Owner != nil {
 				return errors.Wrap(err, "found more than one player that could be the owner")
 			}
