@@ -2,17 +2,11 @@ package state
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
-	"log"
-	"net/http"
-	"sync"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
 	"github.com/pkg/errors"
-	"goji.io"
-	"golang.org/x/net/context"
 )
 
 const (
@@ -210,162 +204,10 @@ func (p *Player) Get(h string, s *cachedshell.Shell) (string, error) {
 	return authorKeyHash, nil
 }
 
-type playersPOSTformat struct {
-	Nodes []string
-}
-
-func WriteJSON(w http.ResponseWriter, d interface{}, c int) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-
-	w.WriteHeader(c)
-
-	err := json.NewEncoder(w).Encode(d)
-
-	if err != nil {
-		log.Println("failed to marshal %+v into JSON")
-
-		w.WriteHeader(http.StatusInternalServerError)
-
-		w.Write([]byte(`"internal server error"`))
-		return
+func (p *Player) ID() string {
+	if p == nil || p.Key() == nil {
+		return ""
 	}
+
+	return p.Key().Hash()
 }
-
-func WriteError(w http.ResponseWriter, e error, c int) {
-	log.Printf("returning error(%v) to user: %+v\n", c, e)
-
-	WriteJSON(
-		w,
-		struct {
-			Error, Details string
-		}{
-			e.Error(), fmt.Sprintf("%+v", e),
-		},
-		c,
-	)
-}
-
-func MakePlayersGetHandler(
-	st *State,
-	mx *sync.Mutex,
-) goji.HandlerFunc {
-	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
-
-		WriteJSON(w, st.Players, http.StatusOK)
-	}
-}
-
-// func MakePlayersGetOneHandler(
-// 	st *State,
-// 	mx *sync.Mutex,
-// ) goji.HandlerFunc {
-// 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-// 		mx.Lock()
-// 		defer mx.Unlock()
-//
-// 		playerID := pat.Param(ctx, "id")
-//
-// 		player, ok := st.Players[playerID]
-//
-// 		if !ok {
-// 			WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
-// 			return
-// 		}
-//
-// 		WriteJSON(w, player, http.StatusOK)
-// 	}
-// }
-
-// func MakePlayersPostHandler(
-// 	nodeDir string,
-// 	cfg config.Config,
-// 	s *cachedshell.Shell,
-// 	st *State,
-// 	mx *sync.Mutex,
-// ) goji.HandlerFunc {
-// 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-// 		mx.Lock()
-// 		defer mx.Unlock()
-//
-// 		body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
-// 		if err != nil {
-// 			WriteError(
-// 				w,
-// 				errors.Wrap(err, "failed to read POST body"),
-// 				http.StatusInternalServerError,
-// 			)
-// 			return
-// 		}
-// 		if err = r.Body.Close(); err != nil {
-// 			WriteError(
-// 				w,
-// 				errors.Wrap(err, "failed to close POST body"),
-// 				http.StatusInternalServerError,
-// 			)
-// 			return
-// 		}
-//
-// 		var postedPlayers playersPOSTformat
-// 		err = json.Unmarshal(body, &postedPlayers)
-// 		if err != nil || len(postedPlayers.Nodes) == 0 {
-// 			WriteError(
-// 				w,
-// 				errors.Wrap(
-// 					err,
-// 					`expected data format: {"Nodes":["node-id-1","node-id-2"]}`,
-// 				),
-// 				http.StatusBadRequest,
-// 			)
-// 			return
-// 		}
-//
-// 		for _, pn := range postedPlayers.Nodes {
-// 			stHash, err := util.FindIpgsHash(pn, s)
-// 			if err != nil {
-// 				WriteError(
-// 					w,
-// 					errors.Wrapf(err, "could not find IPGS object for node %s", pn),
-// 					http.StatusNotFound,
-// 				)
-// 				return
-// 			}
-//
-// 			remoteSt, err := LoadFromHash(stHash, s)
-// 			if err != nil {
-// 				WriteError(
-// 					w,
-// 					errors.Wrapf(err, "could not load IPGS object for node %s", pn),
-// 					http.StatusInternalServerError,
-// 				)
-// 				return
-// 			}
-//
-// 			p, ok := remoteSt.Players[remoteSt.IdentityHash]
-// 			if !ok {
-// 				WriteError(
-// 					w,
-// 					errors.Wrapf(err, "could not find player's object for node %s", pn),
-// 					http.StatusInternalServerError,
-// 				)
-// 				return
-// 			}
-//
-// 			st.Players[p.PublicKeyHash] = p
-// 			st.LastUpdated = IPGSTime{time.Now()}
-// 		}
-//
-// 		err = st.Publish(nodeDir, cfg, s)
-// 		if err != nil {
-// 			WriteError(
-// 				w,
-// 				errors.Wrap(err, "could not publish updated state"),
-// 				http.StatusInternalServerError,
-// 			)
-// 			return
-// 		}
-//
-// 		w.WriteHeader(http.StatusCreated)
-// 	}
-// }

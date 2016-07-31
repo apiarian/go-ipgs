@@ -94,18 +94,18 @@ to quickly create a Cobra application.`,
 		players := goji.SubMux()
 		root.HandleC(pat.New("/players/*"), players)
 
-		//players.HandleFuncC(
-		//	pat.Get("/:id"),
-		//	state.MakePlayersGetOneHandler(st, mx),
-		//)
+		players.HandleFuncC(
+			pat.Get("/:id"),
+			state.MakePlayersGetOneHandler(st, mx),
+		)
 		players.HandleFuncC(
 			pat.Get("/"),
 			state.MakePlayersGetHandler(st, mx),
 		)
-		//players.HandleFuncC(
-		//	pat.Post("/"),
-		//	state.MakePlayersPostHandler(nodeDir, cfg, s, st, mx),
-		//)
+		players.HandleFuncC(
+			pat.Post("/"),
+			state.MakePlayersPostHandler(st, mx, nodeDir, s, cfg.IPGS.UnpinIPNS),
+		)
 
 		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
 		log.Println("HTTP API starting at", addr)

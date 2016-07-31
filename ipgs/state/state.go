@@ -427,3 +427,31 @@ func FindLatestState(nodeDir string, s *cachedshell.Shell, unpin bool) (*State, 
 
 	return st, nil
 }
+
+func (s *State) PlayerForID(id string) *Player {
+	if id == "" {
+		return nil
+	}
+
+	if s.Owner.ID() == id {
+		return s.Owner
+	}
+
+	for _, p := range s.Players {
+		if p.ID() == id {
+			return p
+		}
+	}
+
+	return nil
+}
+
+func (s *State) AddPlayer(p *Player) (changed bool) {
+	existing := s.PlayerForID(p.ID())
+	if existing != nil {
+		return false
+	}
+
+	s.Players = append(s.Players, p)
+	return true
+}
