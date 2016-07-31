@@ -241,3 +241,142 @@ func TestStatePublishGet(t *testing.T) {
 		}
 	}
 }
+
+func TestStateCommitFind(t *testing.T) {
+	sh0, err := newShellForNode(0)
+	fatalIfErr(t, "failed to get a shell for node 0", err)
+
+	initIPNS, err := sh0.ResolveFresh("")
+	fatalIfErr(t, "failed to resolve initial IPNS", err)
+	t.Log("initial IPNS:", initIPNS)
+
+	shInfo, err := sh0.ID()
+	fatalIfErr(t, "failed to get id for node 0", err)
+	sh0ID := shInfo.ID
+
+	sh0Prime, err := newShellForNode(0)
+	fatalIfErr(t, "failed to get a secondary shell for node 0", err)
+
+	sh1, err := newShellForNode(1)
+	fatalIfErr(t, "failed to get a shell for node 1", err)
+
+	nodeDir, err := ioutil.TempDir("", "ipgs-test-state-commit-find")
+	fatalIfErr(t, "create temporary nodeDir", err)
+	t.Log("temporary directory:", nodeDir)
+
+	s := NewState()
+
+	s.LastUpdated = time.Now()
+
+	pk, err := crypto.NewPrivateKey()
+	fatalIfErr(t, "failed to create private key", err)
+
+	pkFile, err := os.Create(filepath.Join(nodeDir, PrivateKeyFileName))
+	fatalIfErr(t, "failed to create private key file", err)
+	defer pkFile.Close()
+
+	err = pk.Write(pkFile)
+	fatalIfErr(t, "failed to write private key to file", err)
+	pkFile.Close()
+
+	o := NewPlayer(
+		NewPublicKey(pk.GetPublicKey(), ""),
+		NewPrivateKey(pk),
+	)
+	o.Timestamp = time.Now()
+	o.Name = "owner"
+	o.Nodes = append(o.Nodes, sh0ID)
+	s.Owner = o
+
+	t.Logf("initial state: %+v\n", s)
+
+	err = s.Commit(nodeDir, sh0, true)
+	fatalIfErr(t, "failed to commit state", err)
+
+	h1, err := sh0.ResolveFresh("")
+	fatalIfErr(t, "failed to resolve the node's IPNS", err)
+	h2, err := sh0Prime.ResolveFresh("")
+	fatalIfErr(t, "failed to resolve the node's IPNS from second API", err)
+	h3, err := sh1.ResolveFresh(sh0ID)
+	fatalIfErr(t, "failed to resolve the node's IPNS from another node", err)
+
+	t.Log("h1:", h1, "h2", h2, "h3", h3)
+
+	if h1 == initIPNS {
+		t.Fatal("the initial IPNS has not actually been updated")
+	}
+	if h1 != h2 {
+		t.Fatal("the two resolved IPNS hashes are different")
+	}
+
+	ipnsObj, err := sh0.ObjectGet(h1)
+	fatalIfErr(t, "failed to get IPNS object", err)
+
+	t.Logf("IPNS object: %+v\n", ipnsObj)
+
+	sRem, err := FindStateForNode(sh0ID, sh1)
+	fatalIfErr(t, "failed to load state from a different node", err)
+
+	t.Logf("remote state: %+v\n", sRem)
+
+	if !sRem.LastUpdated.Equal(s.LastUpdated) {
+		t.Fatal("last updated on the remote node does not match the original state")
+	}
+
+	if sRem.Owner.PrivateKey() != nil {
+		t.Fatal("somehow found a private key for the remote state")
+	}
+
+	if !sRem.Owner.Key().Equals(s.Owner.Key()) {
+		t.Fatal("the owner public keys do not match")
+	}
+
+	if sRem.Owner.Name != s.Owner.Name {
+		t.Fatal("the owner names do not match")
+	}
+
+	// this should be loading from IPFS
+	sPrime, err := FindLatestState(nodeDir, sh0Prime, true)
+	fatalIfErr(t, "failed to find the latest state", err)
+
+	t.Logf("loaded state (IPFS): %+v\n", sPrime)
+
+	if !sPrime.LastUpdated.Equal(s.LastUpdated) {
+		t.Fatal("last updated on the reloaded state does not match original state")
+	}
+
+	if sPrime.Owner.PrivateKey().Key().D.Cmp(s.Owner.PrivateKey().Key().D) != 0 {
+		t.Fatal("loaded private key does not match the original state")
+	}
+
+	if sPrime.Owner.Key().Hash() == "" {
+		t.Fatal("the loaded owner public key should have a hash")
+	}
+
+	luBumped := s.LastUpdated.Add(5 * time.Minute)
+	err = ioutil.WriteFile(
+		filepath.Join(nodeDir, StateDirectoryName, LastUpdatedFileName),
+		[]byte(luBumped.UTC().Format(time.RFC3339Nano)),
+		0600,
+	)
+	fatalIfErr(t, "failed to bump the filesystem last updated time", err)
+
+	sPrime, err = FindLatestState(nodeDir, sh0Prime, true)
+	fatalIfErr(t, "failed to find latest state", err)
+
+	t.Logf("loaded state (filesystem): %+v\n", sPrime)
+
+	if !sPrime.LastUpdated.Equal(luBumped) {
+		t.Fatal("last updated on the reloaded state does not match bumped time")
+	}
+
+	if sPrime.Owner.PrivateKey().Key().D.Cmp(s.Owner.PrivateKey().Key().D) != 0 {
+		t.Fatal("loaded private key does not match the original state")
+	}
+
+	if sPrime.Owner.Key().Hash() == "" {
+		t.Fatal("the loaded owner public key should have a hash")
+	}
+
+	os.RemoveAll(nodeDir)
+}

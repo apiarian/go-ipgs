@@ -3,8 +3,10 @@ package state
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
@@ -301,71 +303,127 @@ func (st *State) Get(h string, s *cachedshell.Shell) error {
 	return nil
 }
 
-// Publish safely saves the state to the node directory and to IPFS. It writes
-// the new state the nodeDir/state-tmp directory, then removes the old
-// nodeDir/state and replaces it with nodeDir/state-tmp.  Finally it builds a
-// new state IPFS object and publishes it into the node's IPNS object at the
-// /ipns/[node]/interplanetary-game-system link.
-//func (st *State) Publish(
-//	nodeDir string,
-//	cfg config.Config,
-//	s *cachedshell.Shell,
-//) error {
-//	curObjHash, err := s.Resolve("")
-//	if err != nil {
-//		// TODO: change this to a more sensible error identification process
-//		if !strings.HasSuffix(err.Error(), "Could not resolve name.") {
-//			return errors.Wrap(err, "failed to resolve nodes IPNS")
-//		}
-//
-//		curObjHash, err = s.NewObject("")
-//		if err != nil {
-//			return errors.Wrap(err, "failed to create new IPNS base object")
-//		}
-//	}
-//
-//	newObjHash, err := s.Patch(
-//		curObjHash,
-//		"rm-link",
-//		"interplanetary-game-system",
-//	)
-//	if err != nil {
-//		if !strings.HasSuffix(err.Error(), "not found") {
-//			return errors.Wrap(err, "failed to remove old interplanetary-game-system link")
-//		}
-//		// the interplanetary-game-system link didn't exist anyway, so we'll use
-//		// the existing object for our purposes
-//		newObjHash = curObjHash
-//	}
-//
-//	newObjHash, err = s.PatchLink(
-//		newObjHash,
-//		"interplanetary-game-system",
-//		stHash,
-//		false,
-//	)
-//	if err != nil {
-//		return errors.Wrap(err, "failed to add state link to the base")
-//	}
-//
-//	err = s.Pin(newObjHash)
-//	if err != nil {
-//		return errors.Wrap(err, "failed to pin the new IPNS base object")
-//	}
-//
-//	err = s.Publish("", newObjHash)
-//	if err != nil {
-//		return errors.Wrap(err, "failed to publish new IPNS base object")
-//	}
-//
-//	log.Printf("published new IPNS base: /ipfs/%s", newObjHash)
-//
-//	if cfg.IPGS.UnpinIPNS {
-//		err = s.Unpin(curObjHash)
-//		if err != nil {
-//			log.Printf("failed to unpin old IPNS base object %s: %s", curObjHash, err)
-//		}
-//	}
-//
-//	return nil
-//}
+func (st *State) Commit(nodeDir string, s *cachedshell.Shell, unpin bool) error {
+	err := st.Write(nodeDir)
+	if err != nil {
+		return errors.Wrap(err, "failed to write state to filesystem")
+	}
+
+	h, err := st.Publish(s)
+	if err != nil {
+		return errors.Wrap(err, "failed to publish state to IPFS")
+	}
+
+	log.Println("created state object at", h)
+
+	cur, err := s.ResolveFresh("")
+	if err != nil {
+		if !strings.HasSuffix(err.Error(), "Could not resolve name.") {
+			return errors.Wrap(err, "failed to resolve node's IPNS")
+		}
+
+		cur, err = s.NewObject("")
+		if err != nil {
+			return errors.Wrap(err, "failed to create IPNS base object")
+		}
+	}
+
+	new, err := s.Patch(cur, "rm-link", StateLinkName)
+	if err != nil {
+		if !strings.HasSuffix(err.Error(), "not found") {
+			return errors.Wrap(err, "failed to remove old state link")
+		}
+
+		new = cur
+	}
+
+	new, err = s.PatchLink(new, StateLinkName, h, false)
+	if err != nil {
+		return errors.Wrap(err, "failed to add state link to IPNS base")
+	}
+
+	err = s.Pin(new)
+	if err != nil {
+		return errors.Wrap(err, "failed to pin new IPNS base")
+	}
+
+	err = s.Publish("", new)
+	if err != nil {
+		return errors.Wrap(err, "failed to publish new IPNS base")
+	}
+
+	log.Println("published hash", new)
+
+	if unpin && (new != cur) {
+		err = s.Unpin(cur)
+		if err != nil {
+			log.Printf("failed to unpin old IPNS base %s: %+v\n", cur, err)
+		}
+	}
+
+	log.Println("updated IPNS to", new)
+
+	return nil
+}
+
+func FindStateForNode(nodeID string, s *cachedshell.Shell) (*State, error) {
+	var search string
+	if nodeID != "" {
+		search = fmt.Sprintf("/ipns/%s", nodeID)
+	}
+
+	h, err := s.Resolve(search)
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not resolve '%s'", search)
+	}
+
+	sh, err := s.ResolvePath(fmt.Sprintf("%s/%s", h, StateLinkName))
+	if err != nil {
+		return nil, errors.Wrapf(err, "no IPGS object under node '%s'", search)
+	}
+
+	st := NewState()
+	err = st.Get(sh, s)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get state from %s", sh)
+	}
+
+	return st, nil
+}
+
+func FindLatestState(nodeDir string, s *cachedshell.Shell, unpin bool) (*State, error) {
+	fsSt := NewState()
+	err := fsSt.Read(nodeDir)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to read state from file system")
+	}
+
+	ipfsSt, err := FindStateForNode("", s)
+	if err != nil {
+		log.Printf("failed to find state in IPFS: %+v\n", err)
+	}
+
+	var st *State
+
+	if ipfsSt == nil || fsSt.LastUpdated.After(ipfsSt.LastUpdated) {
+		log.Println("filesystem state is more fresh than the IPFS one")
+
+		st = fsSt
+	} else {
+		log.Println("IPFS state is at least as fresh as the filesystem one")
+
+		st = ipfsSt
+
+		err := st.Owner.addPrivateKey(fsSt.Owner.PrivateKey())
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to add private key to owner")
+		}
+	}
+
+	err = st.Commit(nodeDir, s, unpin)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to commit latest state")
+	}
+
+	return st, nil
+}

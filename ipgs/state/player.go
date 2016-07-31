@@ -45,7 +45,7 @@ func (p *Player) PrivateKey() *PrivateKey {
 	return p.privateKey
 }
 
-func (p *Player) AddPrivateKey(k *PrivateKey) error {
+func (p *Player) addPrivateKey(k *PrivateKey) error {
 	if p.privateKey != nil {
 		return errors.New("cannot replace existing private key")
 	}

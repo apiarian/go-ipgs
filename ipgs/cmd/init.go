@@ -321,22 +321,10 @@ func bootstrapState(nodeDir string, cfg config.Config) error {
 	st.Owner = owner
 	st.LastUpdated = time.Now()
 
-	err = st.Write(nodeDir)
+	err = st.Commit(nodeDir, s, cfg.IPGS.UnpinIPNS)
 	if err != nil {
-		return errors.Wrap(err, "failed to write initial state")
+		return errors.Wrap(err, "failed to commit initial state")
 	}
-
-	h, err := st.Publish(s)
-	if err != nil {
-		return errors.Wrap(err, "failed to publish initial state")
-	}
-
-	h, err = common.InstallIpgsStateHash(h, s, cfg.IPGS.UnpinIPNS)
-	if err != nil {
-		return errors.Wrap(err, "failed to install initial IPGS state")
-	}
-
-	log.Println("published IPGS state to", h)
 
 	return nil
 }

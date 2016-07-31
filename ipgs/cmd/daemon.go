@@ -34,7 +34,6 @@ import (
 	"github.com/apiarian/go-ipgs/ipgs/config"
 	"github.com/apiarian/go-ipgs/ipgs/state"
 	"github.com/apiarian/go-ipgs/util"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"goji.io"
@@ -82,7 +81,7 @@ to quickly create a Cobra application.`,
 			st *state.State
 			mx *sync.Mutex
 		)
-		st, err = loadLatestState(nodeDir, cfg, s)
+		st, err = state.FindLatestState(nodeDir, s, cfg.IPGS.UnpinIPNS)
 		util.FatalIfErr("load latest state", err)
 
 		mx = &sync.Mutex{}
@@ -127,59 +126,6 @@ func init() {
 	// is called directly, e.g.:
 	// daemonCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
-}
-
-func loadLatestState(
-	nodeDir string,
-	cfg config.Config,
-	s *cachedshell.Shell,
-) (*state.State, error) {
-	fsSt := state.NewState()
-	err := fsSt.Read(nodeDir)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to load read state from file system")
-	}
-
-	ipfsSt := state.NewState()
-
-	ipfsStHash, err := common.FindIpgsHash("", s)
-	if err != nil {
-		log.Printf("failed to find IPGS state in IPFS: %+v\n", err)
-	} else {
-		err := ipfsSt.Get(ipfsStHash, s)
-		if err != nil {
-			log.Printf("failed to load IPGS state from IPFS: %+v\n", err)
-		}
-	}
-
-	var curSt *state.State
-
-	if ipfsSt.LastUpdated.After(fsSt.LastUpdated) {
-		log.Println("IPFS state is more fresh than the filesystem one")
-
-		curSt = ipfsSt
-
-		err := curSt.Owner.AddPrivateKey(fsSt.Owner.PrivateKey())
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to add private key to owner")
-		}
-
-		err = curSt.Write(nodeDir)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to write newer IPFS state to filesystem")
-		}
-	} else {
-		log.Println("filesystem state is at least as fresh as the IPFS one")
-
-		curSt = fsSt
-
-		h, err := curSt.Publish(s)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to publish state to IPFS")
-		}
-	}
-
-	return curSt, nil
 }
 
 func periodicallyUpdateState(
