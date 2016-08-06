@@ -39,7 +39,7 @@ func (st *State) LastUpdatedString() string {
 }
 
 func (st *State) ParseLastUpdated(s string) error {
-	t, err := time.ParseInLocation(time.RFC3339Nano, s, nil)
+	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		return errors.Wrapf(err, "could not parse string '%s'", s)
 	}
@@ -454,4 +454,24 @@ func (s *State) AddPlayer(p *Player) (changed bool) {
 
 	s.Players = append(s.Players, p)
 	return true
+}
+
+func (s *State) Combine(o *State) (bool, error) {
+	var changed bool
+
+	ourP := s.PlayerForID(o.Owner.ID())
+	if ourP == nil {
+		return changed, errors.New("failed to find the other state's owner in our player list")
+	}
+
+	changed, err := ourP.Update(o.Owner)
+	if err != nil {
+		return changed, errors.Wrap(err, "failed to update our version of the player")
+	}
+
+	if changed {
+		s.LastUpdated = time.Now()
+	}
+
+	return changed, nil
 }

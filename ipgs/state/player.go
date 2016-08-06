@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 
@@ -31,12 +32,58 @@ func NewPlayer(pub *PublicKey, priv *PrivateKey) *Player {
 	}
 }
 
+func (p *Player) String() string {
+	return fmt.Sprintf("%s (%s)", p.Name, p.ID())
+}
+
 func (p *Player) Key() *PublicKey {
 	return p.publicKey
 }
 
 func (p *Player) PrivateKey() *PrivateKey {
 	return p.privateKey
+}
+
+func (p *Player) Update(o *Player) (bool, error) {
+	var changed bool
+
+	if !p.Key().Equals(o.Key()) {
+		return changed, errors.New("player keys do not match")
+	}
+
+	if p.Name != o.Name {
+		p.Name = o.Name
+		changed = true
+	}
+
+	difNodes := len(p.Nodes) != len(o.Nodes)
+	if !difNodes {
+		for _, oN := range o.Nodes {
+			var found bool
+			for _, pN := range p.Nodes {
+				if oN == pN {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				difNodes = true
+				break
+			}
+		}
+	}
+
+	if difNodes {
+		p.Nodes = o.Nodes
+		changed = true
+	}
+
+	if changed {
+		p.Timestamp = time.Now()
+	}
+
+	return changed, nil
 }
 
 func (p *Player) addPrivateKey(k *PrivateKey) error {

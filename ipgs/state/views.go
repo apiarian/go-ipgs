@@ -49,6 +49,29 @@ func WriteError(w http.ResponseWriter, e error, c int) {
 	)
 }
 
+func GetRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		WriteError(
+			w,
+			errors.Wrap(err, "failed to read POST body"),
+			http.StatusInternalServerError,
+		)
+		return nil, false
+	}
+
+	if err = r.Body.Close(); err != nil {
+		WriteError(
+			w,
+			errors.Wrap(err, "failed to close POST body"),
+			http.StatusInternalServerError,
+		)
+		return nil, false
+	}
+
+	return body, true
+}
+
 type viewPlayer struct {
 	ID        string
 	Timestamp IPGSTime
@@ -85,6 +108,18 @@ func MakePlayersGetHandler(
 	}
 }
 
+func findPlayerForId(ctx context.Context, w http.ResponseWriter, r *http.Request, st *State) *Player {
+	playerID := pat.Param(ctx, "id")
+
+	player := st.PlayerForID(playerID)
+
+	if player == nil {
+		WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
+	}
+
+	return player
+}
+
 func MakePlayersGetOneHandler(
 	st *State,
 	mx *sync.Mutex,
@@ -93,16 +128,81 @@ func MakePlayersGetOneHandler(
 		mx.Lock()
 		defer mx.Unlock()
 
-		playerID := pat.Param(ctx, "id")
-
-		player := st.PlayerForID(playerID)
+		player := findPlayerForId(ctx, w, r, st)
 
 		if player == nil {
-			WriteError(w, errors.Errorf("no player with id '%s'", playerID), http.StatusNotFound)
 			return
 		}
 
 		WriteJSON(w, player.viewPlayer(), http.StatusOK)
+	}
+}
+
+type playersPATCHformat struct {
+	Name string
+}
+
+func MakePlayersPatchHandler(
+	st *State,
+	mx *sync.Mutex,
+	nodeDir string,
+	s *cachedshell.Shell,
+	unpin bool,
+) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		mx.Lock()
+		defer mx.Unlock()
+
+		player := findPlayerForId(ctx, w, r, st)
+		if player == nil {
+			return
+		}
+
+		body, ok := GetRequestBody(w, r)
+		if !ok {
+			return
+		}
+
+		var patchContent playersPATCHformat
+		err := json.Unmarshal(body, &patchContent)
+		if err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, `expected data format: {"Name":"new-name"}`),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		var changed bool
+
+		if patchContent.Name != "" && player.Name != patchContent.Name {
+			if player != st.Owner {
+				WriteError(
+					w,
+					errors.New("can only rename the owner"),
+					http.StatusForbidden,
+				)
+				return
+			}
+
+			player.Name = patchContent.Name
+			player.Timestamp = time.Now()
+			changed = true
+		}
+
+		if changed {
+			st.LastUpdated = time.Now()
+			err := st.Commit(nodeDir, s, unpin)
+			if err != nil {
+				WriteError(
+					w,
+					errors.Wrap(err, "failed to commit updated state"),
+					http.StatusInternalServerError,
+				)
+				return
+			}
+		}
 	}
 }
 
@@ -121,26 +221,13 @@ func MakePlayersPostHandler(
 		mx.Lock()
 		defer mx.Unlock()
 
-		body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			WriteError(
-				w,
-				errors.Wrap(err, "failed to read POST body"),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-		if err = r.Body.Close(); err != nil {
-			WriteError(
-				w,
-				errors.Wrap(err, "failed to close POST body"),
-				http.StatusInternalServerError,
-			)
+		body, ok := GetRequestBody(w, r)
+		if !ok {
 			return
 		}
 
 		var postedPlayers playersPOSTformat
-		err = json.Unmarshal(body, &postedPlayers)
+		err := json.Unmarshal(body, &postedPlayers)
 		if err != nil || len(postedPlayers.Nodes) == 0 {
 			WriteError(
 				w,

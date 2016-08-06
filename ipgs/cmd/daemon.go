@@ -99,6 +99,10 @@ to quickly create a Cobra application.`,
 			state.MakePlayersGetOneHandler(st, mx),
 		)
 		players.HandleFuncC(
+			pat.Patch("/:id"),
+			state.MakePlayersPatchHandler(st, mx, nodeDir, s, cfg.IPGS.UnpinIPNS),
+		)
+		players.HandleFuncC(
 			pat.Get("/"),
 			state.MakePlayersGetHandler(st, mx),
 		)
@@ -155,26 +159,38 @@ func updateState(
 
 	log.Println("updating state")
 
-	// for h, p := range st.Players {
-	// 	var pState *state.State
-	// 	for _, n := range p.Nodes {
-	// 		stHash, err := util.FindIpgsHash(n, s)
-	// 		if err != nil {
-	// 			log.Printf("could not find IPGS state for player %s: %+v\n", h, err)
-	// 			continue
-	// 		}
+	var changed bool
 
-	// 		state, err := state.LoadFromHash(stHash, s)
-	// 		if err != nil {
-	// 			log.Printf("could not load IPGS state for player %s: %+v\n", h, err)
-	// 			continue
-	// 		}
+	for _, p := range st.Players {
+		var pSt *state.State
+		for _, n := range p.Nodes {
+			stN, err := state.FindStateForNode(n, s)
+			if err != nil {
+				log.Printf("could not find IPGS state for player %s node %s: %+v\n", p, n, err)
+				continue
+			}
 
-	// 		if pState == nil || state.LastUpdated.After(pState.LastUpdated.Time) {
-	// 			pState = state
-	// 		}
-	// 	}
+			if pSt == nil || stN.LastUpdated.After(pSt.LastUpdated) {
+				pSt = stN
+			}
+		}
 
-	// 	log.Printf("latest state for player %s: %+v\n", h, pState)
-	// }
+		if pSt == nil {
+			log.Printf("could not find any IPGS state for player %s\n", p)
+			continue
+		}
+
+		var err error
+		changed, err = st.Combine(pSt)
+		if err != nil {
+			log.Printf("failed to combine state with the state for player %s: %+v\n", p, err)
+		}
+	}
+
+	if changed {
+		err := st.Commit(nodeDir, s, cfg.IPGS.UnpinIPNS)
+		if err != nil {
+			log.Printf("failed to commit state: %+v\n", err)
+		}
+	}
 }
