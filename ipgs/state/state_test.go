@@ -119,7 +119,10 @@ func TestStateReadWrite(t *testing.T) {
 	err = pk.Write(pkFile)
 	fatalIfErr(t, "failed to write private key to file", err)
 
-	o := NewPlayer(NewPublicKey(pk.GetPublicKey(), ""), NewPrivateKey(pk))
+	o := NewPlayer(
+		NewPublicKey(pk.GetPublicKey(), "owner-hash"),
+		NewPrivateKey(pk),
+	)
 	o.Timestamp = time.Now()
 	o.Name = "owner"
 	o.Flags["something"] = 1
@@ -131,7 +134,10 @@ func TestStateReadWrite(t *testing.T) {
 		pk, err := crypto.NewPrivateKey()
 		fatalIfErr(t, "failed to create provate key for other player", err)
 
-		p := NewPlayer(NewPublicKey(pk.GetPublicKey(), ""), nil)
+		p := NewPlayer(
+			NewPublicKey(pk.GetPublicKey(), fmt.Sprintf("player-hash-%d", i)),
+			nil,
+		)
 		p.Timestamp = time.Now()
 		p.Name = fmt.Sprintf("player%v", i)
 		p.Flags["cool-factor"] = i
@@ -139,6 +145,17 @@ func TestStateReadWrite(t *testing.T) {
 
 		s.Players = append(s.Players, p)
 	}
+
+	i1, err := s.CreateGame(5*time.Hour, "test game")
+	fatalIfErr(t, "failed to create test game", err)
+
+	i2, err := s.CreateGame(5*time.Hour, "test game 2")
+	fatalIfErr(t, "failed to create a second test game", err)
+
+	s.games[i2].head.(*Challenge).hash = "pretend-challenge-hash"
+
+	i2, err = s.AcceptGame(i2, 5*time.Hour, "test acceptance")
+	fatalIfErr(t, "failed to accept the second game", err)
 
 	err = s.Write(nodeDir)
 	fatalIfErr(t, "failed to write state to directory", err)
@@ -160,6 +177,18 @@ func TestStateReadWrite(t *testing.T) {
 		if l.Players[i].Name != p.Name {
 			t.Fatal("loaded player does not match original")
 		}
+	}
+
+	if len(l.games) != 2 {
+		t.Fatal("did not load 2 games")
+	}
+
+	if l.Game(i1).ID() != s.Game(i1).ID() {
+		t.Fatal("the first game ids do not match")
+	}
+
+	if l.Game(i2).ID() != s.Game(i2).ID() {
+		t.Fatal("the second game ids do not match")
 	}
 
 	os.RemoveAll(nodeDir)
@@ -203,6 +232,21 @@ func TestStatePublishGet(t *testing.T) {
 	h, err := st.Publish(s)
 	fatalIfErr(t, "failed to publish state", err)
 
+	i1, err := st.CreateGame(5*time.Hour, "test game 1")
+	fatalIfErr(t, "failed to create test game 1", err)
+
+	i2, err := st.CreateGame(5*time.Hour, "test game 2")
+	fatalIfErr(t, "failed to create test game 2", err)
+
+	h, err = st.Publish(s)
+	fatalIfErr(t, "failed to publish state with a pair of challenges", err)
+
+	i2, err = st.AcceptGame(i2, 5*time.Hour, "accept 2")
+	fatalIfErr(t, "failed to accept the second test game", err)
+
+	h, err = st.Publish(s)
+	fatalIfErr(t, "failed to publish state with a challenge and acceptance", err)
+
 	t.Log("hash:", h)
 
 	if h == "" {
@@ -239,6 +283,18 @@ func TestStatePublishGet(t *testing.T) {
 		if found != 1 {
 			t.Fatal("did not find exactly one match for the player")
 		}
+	}
+
+	if len(l.games) != 2 {
+		t.Fatal("did not load 2 games")
+	}
+
+	if l.Game(i1).ID() != st.Game(i1).ID() {
+		t.Fatal("the first game ids do not match")
+	}
+
+	if l.Game(i2).ID() != st.Game(i2).ID() {
+		t.Fatal("the second game ids to not match")
 	}
 }
 

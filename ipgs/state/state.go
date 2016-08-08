@@ -18,9 +18,12 @@ const (
 	StateLinkName        = "interplanetary-game-system"
 	IdentityLinkName     = "identity.pem"
 	PlayersLinkName      = "players"
+	ChallengesLinkName   = "challenges"
+	GamesLinkName        = "games"
 	LastUpdatedFileName  = "last-updated"
 	StateDirectoryName   = "state"
 	PlayersDirectoryName = "players"
+	GamesDirectoryName   = "games"
 	PrivateKeyFileName   = "private.pem"
 )
 
@@ -28,10 +31,13 @@ type State struct {
 	LastUpdated time.Time
 	Owner       *Player
 	Players     []*Player
+	games       map[string]*Game
 }
 
 func NewState() *State {
-	return &State{}
+	return &State{
+		games: make(map[string]*Game),
+	}
 }
 
 func (st *State) LastUpdatedString() string {
@@ -111,6 +117,30 @@ func (st *State) Write(nodeDir string) error {
 		}
 	}
 
+	gms := filepath.Join(tmp, GamesDirectoryName)
+	err = os.Mkdir(gms, 0700)
+	if err != nil {
+		return errors.Wrap(err, "failed to create games directory")
+	}
+
+	for k, g := range st.games {
+		f, err := os.Create(
+			filepath.Join(
+				gms,
+				fmt.Sprintf("%s.json", k),
+			),
+		)
+		if err != nil {
+			return errors.Wrap(err, "failed to create game file")
+		}
+		defer f.Close()
+
+		err = g.Write(f)
+		if err != nil {
+			return errors.Wrap(err, "failed to write game to file")
+		}
+	}
+
 	dir := filepath.Join(nodeDir, StateDirectoryName)
 	err = os.RemoveAll(dir)
 	if err != nil {
@@ -186,6 +216,42 @@ func (st *State) Read(nodeDir string) error {
 		return errors.New("did not find a player object for the state's owner")
 	}
 
+	playerLib := []*Player{st.Owner}
+	for _, p := range st.Players {
+		playerLib = append(playerLib, p)
+	}
+
+	gmDir := filepath.Join(dir, GamesDirectoryName)
+	gms, err := ioutil.ReadDir(gmDir)
+	if err != nil {
+		return errors.Wrap(err, "failed to read games directory")
+	}
+
+	for _, gfInfo := range gms {
+		gmF, err := os.Open(filepath.Join(gmDir, gfInfo.Name()))
+		if err != nil {
+			return errors.Wrap(err, "failed to open game file")
+		}
+		defer gmF.Close()
+
+		g, err := ReadGame(gmF, playerLib)
+		if err != nil {
+			return errors.Wrap(err, "failed to read game from file")
+		}
+
+		i := g.ID()
+
+		if i == "" {
+			return errors.Errorf("game loaded from %s has an empty ID", gfInfo.Name())
+		}
+
+		if _, ok := st.games[i]; ok {
+			return errors.Errorf("game with id %s already exists", i)
+		}
+
+		st.games[i] = g
+	}
+
 	return nil
 }
 
@@ -194,6 +260,8 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "failed to create state object")
 	}
+
+	emptyObjectH := h
 
 	h, err = s.PatchData(h, true, st.LastUpdatedString())
 	if err != nil {
@@ -215,7 +283,7 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 		return "", errors.Wrap(err, "failed to add identity link to state")
 	}
 
-	pHash, err := s.NewObject("")
+	pHash := emptyObjectH
 	if err != nil {
 		return "", errors.Wrap(err, "failed to create players object")
 	}
@@ -245,6 +313,44 @@ func (st *State) Publish(s *cachedshell.Shell) (string, error) {
 	h, err = s.PatchLink(h, PlayersLinkName, pHash, false)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to add players link to state")
+	}
+
+	chHash := emptyObjectH
+	gHash := emptyObjectH
+
+	for _, g := range st.games {
+		gH, err := g.Publish(s)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to publish game")
+		}
+
+		if g.Acceptance() != nil {
+			gHash, err = s.PatchLink(gHash, g.ID(), gH, false)
+			if err != nil {
+				return "", errors.Wrap(err, "failed to add game to games object")
+			}
+		} else if g.Challenge() != nil {
+			chHash, err = s.PatchLink(chHash, g.ID(), gH, false)
+			if err != nil {
+				return "", errors.Wrap(err, "failed to add game to challenges object")
+			}
+		} else {
+			return "", errors.New("found a game without a challenge or acceptance")
+		}
+	}
+
+	if chHash != emptyObjectH {
+		h, err = s.PatchLink(h, ChallengesLinkName, chHash, false)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to add challenges link to state")
+		}
+	}
+
+	if gHash != emptyObjectH {
+		h, err = s.PatchLink(h, GamesLinkName, gHash, false)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to add games link to state")
+		}
 	}
 
 	return h, nil
@@ -298,6 +404,37 @@ func (st *State) Get(h string, s *cachedshell.Shell) error {
 	}
 	if st.Owner == nil {
 		return errors.New("did not find a player object for the state's owner")
+	}
+
+	for _, l := range obj.Links {
+		switch l.Name {
+
+		case ChallengesLinkName, GamesLinkName:
+			gObj, err := s.ObjectGet(l.Hash)
+			if err != nil {
+				return errors.Wrap(err, "failed to get games or challenges object")
+			}
+
+			for _, gl := range gObj.Links {
+				g, err := GetGame(gl.Hash, s, players)
+				if err != nil {
+					return errors.Wrap(err, "failed to get game")
+				}
+
+				i := g.ID()
+
+				if i == "" {
+					return errors.Errorf("game at %s has an empty ID", gl.Hash)
+				}
+
+				if _, ok := st.games[i]; ok {
+					return errors.Errorf("game with id %s already exists", i)
+				}
+
+				st.games[i] = g
+			}
+
+		}
 	}
 
 	return nil
@@ -474,4 +611,104 @@ func (s *State) Combine(o *State) (bool, error) {
 	}
 
 	return changed, nil
+}
+
+func (st *State) Game(id string) *Game {
+	return st.games[id]
+}
+
+func (st *State) CreateGame(exp time.Duration, c string) (string, error) {
+	g, err := CreateGame(
+		st.Owner,
+		exp,
+		c,
+	)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create game")
+	}
+
+	i := g.ID()
+
+	_, ok := st.games[i]
+	if ok {
+		return "", errors.Errorf("a game with id %s already exists", i)
+	}
+
+	st.games[i] = g
+
+	return i, nil
+}
+
+func (st *State) AcceptGame(id string, exp time.Duration, c string) (string, error) {
+	g := st.Game(id)
+	if g == nil {
+		return "", errors.New("game does not exist")
+	}
+
+	err := g.Accept(
+		st.Owner,
+		exp,
+		c,
+	)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to accept game")
+	}
+
+	i := g.ID()
+
+	if i == id {
+		return "", errors.New("accepted game has the same as the challenge")
+	}
+
+	_, ok := st.games[i]
+	if ok {
+		return "", errors.Errorf("this game id %s has already been accepted", i)
+	}
+
+	delete(st.games, id)
+	st.games[i] = g
+
+	return i, nil
+}
+
+func (st *State) ConfirmGame(id string, exp time.Duration, c string) error {
+	g := st.Game(id)
+	if g == nil {
+		return errors.New("game does not exist")
+	}
+
+	err := g.Confirm(
+		st.Owner,
+		exp,
+		c,
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to confirm game")
+	}
+
+	i := g.ID()
+	if i != id {
+		return errors.Errorf("confirmed game has a different id: %s", i)
+	}
+
+	return nil
+}
+
+func (st *State) StepGame(id string, data []byte) error {
+	g := st.Game(id)
+	if g == nil {
+		return errors.New("game does not exist")
+	}
+
+	err := g.Step(st.Owner, data)
+	if err != nil {
+		return errors.Wrap(err, "failed to step game")
+	}
+
+	i := g.ID()
+	if i != id {
+		return errors.Errorf("stepped game has a different id: %s", i)
+	}
+
+	return nil
 }

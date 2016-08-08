@@ -58,6 +58,8 @@ const (
 	NameHeader = "Name"
 	// CommentHeader is the key for the Comment pem header
 	CommentHeader = "Comment"
+	// SignaturePEMType is the type recorder in the pem preamble for signaures
+	SignaturePEMType = "ECDSA P256 SIGNATURE"
 )
 
 // NewPrivateKey creates a random ECDSA P256 private key (which includes a public key)

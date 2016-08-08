@@ -180,10 +180,13 @@ func updateState(
 			continue
 		}
 
-		var err error
-		changed, err = st.Combine(pSt)
+		c, err := st.Combine(pSt)
 		if err != nil {
 			log.Printf("failed to combine state with the state for player %s: %+v\n", p, err)
+		}
+
+		if c {
+			changed = true
 		}
 	}
 

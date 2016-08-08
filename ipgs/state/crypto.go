@@ -43,6 +43,11 @@ func (k *PublicKey) Hash() string {
 	return k.hash
 }
 
+type jsonPublicKey struct {
+	PEM  string
+	Hash string
+}
+
 func (k *PublicKey) MarshalJSON() ([]byte, error) {
 	b := bytes.NewBuffer(nil)
 
@@ -53,28 +58,35 @@ func (k *PublicKey) MarshalJSON() ([]byte, error) {
 
 	s := b.String()
 
-	o, err := json.Marshal(s)
+	jPk := jsonPublicKey{
+		PEM:  s,
+		Hash: k.hash,
+	}
+
+	o, err := json.Marshal(jPk)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to marshal string")
+		return nil, errors.Wrap(err, "failed to marshal JSON Public Key")
 	}
 
 	return o, nil
 }
 
 func (k *PublicKey) UnmarshalJSON(d []byte) error {
-	var s string
-	err := json.Unmarshal(d, &s)
+	var jPk jsonPublicKey
+
+	err := json.Unmarshal(d, &jPk)
 	if err != nil {
-		return errors.Wrap(err, "failed to unmarshal string")
+		return errors.Wrap(err, "failed to unmarshal JSON Public Key")
 	}
 
-	b := bytes.NewBufferString(s)
+	b := bytes.NewBufferString(jPk.PEM)
 	pk, err := crypto.ReadPublicKey(b)
 	if err != nil {
 		return errors.Wrap(err, "failed to read key")
 	}
 
 	k.key = pk
+	k.hash = jPk.Hash
 
 	return nil
 }

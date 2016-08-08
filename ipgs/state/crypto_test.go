@@ -30,8 +30,8 @@ func TestCryptoJSON(t *testing.T) {
 		t.Fatal("the new key is not the same as the old key")
 	}
 
-	if l.Hash() == k.Hash() {
-		t.Fatalf("the hash was inexplicably restored from the JSON. magic?")
+	if l.Hash() != k.Hash() {
+		t.Fatalf("the hash did not get restored from the JSON")
 	}
 }
 
