@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cachedshell"
@@ -90,13 +89,10 @@ func (p *Player) viewPlayer() *viewPlayer {
 	}
 }
 
-func MakePlayersGetHandler(
-	st *State,
-	mx *sync.Mutex,
-) goji.HandlerFunc {
+func MakePlayersGetHandler(b *Broker) goji.HandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
+		st := b.Checkout()
+		defer b.Return()
 
 		players := []*viewPlayer{st.Owner.viewPlayer()}
 
@@ -120,13 +116,10 @@ func findPlayerForId(ctx context.Context, w http.ResponseWriter, r *http.Request
 	return player
 }
 
-func MakePlayersGetOneHandler(
-	st *State,
-	mx *sync.Mutex,
-) goji.HandlerFunc {
+func MakePlayersGetOneHandler(b *Broker) goji.HandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
+		st := b.Checkout()
+		defer b.Return()
 
 		player := findPlayerForId(ctx, w, r, st)
 
@@ -142,16 +135,10 @@ type playersPATCHformat struct {
 	Name string
 }
 
-func MakePlayersPatchHandler(
-	st *State,
-	mx *sync.Mutex,
-	nodeDir string,
-	s *cachedshell.Shell,
-	unpin bool,
-) goji.HandlerFunc {
+func MakePlayersPatchHandler(b *Broker) goji.HandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
+		st := b.Checkout()
+		defer b.Return()
 
 		player := findPlayerForId(ctx, w, r, st)
 		if player == nil {
@@ -192,12 +179,11 @@ func MakePlayersPatchHandler(
 		}
 
 		if changed {
-			st.LastUpdated = time.Now()
-			err := st.Commit(nodeDir, s, unpin)
+			err := b.Checkin()
 			if err != nil {
 				WriteError(
 					w,
-					errors.Wrap(err, "failed to commit updated state"),
+					errors.Wrap(err, "failed to checkin changed state"),
 					http.StatusInternalServerError,
 				)
 				return
@@ -210,16 +196,10 @@ type playersPOSTformat struct {
 	Nodes []string
 }
 
-func MakePlayersPostHandler(
-	st *State,
-	mx *sync.Mutex,
-	nodeDir string,
-	s *cachedshell.Shell,
-	unpin bool,
-) goji.HandlerFunc {
+func MakePlayersPostHandler(b *Broker, s *cachedshell.Shell) goji.HandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		mx.Lock()
-		defer mx.Unlock()
+		st := b.Checkout()
+		defer b.Return()
 
 		body, ok := GetRequestBody(w, r)
 		if !ok {
@@ -240,6 +220,8 @@ func MakePlayersPostHandler(
 			return
 		}
 
+		var changed bool
+
 		for _, pn := range postedPlayers.Nodes {
 			remoteSt, err := FindStateForNode(pn, s)
 			if err != nil {
@@ -251,22 +233,283 @@ func MakePlayersPostHandler(
 				return
 			}
 
-			changed := st.AddPlayer(remoteSt.Owner)
-			if changed {
-				st.LastUpdated = time.Now()
+			c := st.AddPlayer(remoteSt.Owner)
+
+			if c {
+				changed = true
 			}
 		}
 
-		err = st.Commit(nodeDir, s, unpin)
+		if changed {
+			err := b.Checkin()
+			if err != nil {
+				WriteError(
+					w,
+					errors.Wrap(err, "could not checkin updated state"),
+					http.StatusInternalServerError,
+				)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+type viewChallenge struct {
+	ID           string
+	Timestamp    IPGSTime
+	ChallengerID string
+	Timeout      IPGSTime
+	Comment      string
+}
+
+func (g *Game) viewChallenge() *viewChallenge {
+	c := g.Challenge()
+	if c == nil {
+		return nil
+	}
+
+	return &viewChallenge{
+		ID:           c.ID(),
+		Timestamp:    IPGSTime{c.Timestamp()},
+		ChallengerID: c.Challenger().ID(),
+		Timeout:      IPGSTime{c.Timeout()},
+		Comment:      c.Comment(),
+	}
+}
+
+func MakeChallengesGetHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		var challenges []*viewChallenge
+
+		for _, g := range st.Challenges() {
+			challenges = append(challenges, g.viewChallenge())
+		}
+
+		WriteJSON(w, challenges, http.StatusOK)
+	}
+}
+
+func findChallengeForID(ctx context.Context, w http.ResponseWriter, r *http.Request, st *State) *Game {
+	gameID := pat.Param(ctx, "id")
+
+	game := st.Game(gameID)
+	if game == nil || game.Challenge() == nil {
+		WriteError(w, errors.Errorf("no challenge with id '%s'", gameID), http.StatusNotFound)
+		return nil
+	}
+
+	return game
+}
+
+func MakeChallengesGetOneHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		game := findChallengeForID(ctx, w, r, st)
+
+		if game == nil {
+			return
+		}
+
+		WriteJSON(w, game.viewChallenge(), http.StatusOK)
+	}
+}
+
+type challengesPOSTformat struct {
+	TimeoutMinutes int
+	Comment        string
+}
+
+func MakeChallengesPostHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		body, ok := GetRequestBody(w, r)
+		if !ok {
+			return
+		}
+
+		var postedChallenge challengesPOSTformat
+		err := json.Unmarshal(body, &postedChallenge)
+		if err != nil || postedChallenge.TimeoutMinutes == 0 {
+			WriteError(
+				w,
+				errors.Wrap(
+					err,
+					`expected data format: {"TimeoutMinutes": 60, "Comment": "friendly game"}`,
+				),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		_, err = st.CreateGame(
+			time.Duration(postedChallenge.TimeoutMinutes)*time.Minute,
+			postedChallenge.Comment,
+		)
 		if err != nil {
 			WriteError(
 				w,
-				errors.Wrap(err, "could not commit updated state"),
+				errors.Wrap(err, "could not create challenge"),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		err = b.Checkin()
+		if err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, "could not checkin updated state"),
 				http.StatusInternalServerError,
 			)
 			return
 		}
 
 		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+type acceptPOSTformat struct {
+	TimeoutMinutes int
+	Comment        string
+}
+
+func MakeChallengesAcceptHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		body, ok := GetRequestBody(w, r)
+		if !ok {
+			return
+		}
+
+		game := findChallengeForID(ctx, w, r, st)
+
+		if game == nil {
+			return
+		}
+
+		var postedAcceptance acceptPOSTformat
+		err := json.Unmarshal(body, &postedAcceptance)
+		if err != nil || postedAcceptance.TimeoutMinutes == 0 {
+			WriteError(
+				w,
+				errors.Wrap(
+					err,
+					`expected data format: {"TimeoutMinutes": 60, "Comment": "lets go!"}`,
+				),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		_, err = st.AcceptGame(
+			game.ID(),
+			time.Duration(postedAcceptance.TimeoutMinutes)*time.Minute,
+			postedAcceptance.Comment,
+		)
+		if err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, "could not accept challenge"),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		err = b.Checkin()
+		if err != nil {
+			WriteError(
+				w,
+				errors.Wrap(err, "could not checking updated state"),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+type viewGame struct {
+	ID                  string
+	Timestamp           IPGSTime
+	ChallengerID        string
+	AccepterID          string
+	Timeout             IPGSTime
+	ChallengeComment    string
+	AcceptanceComment   string
+	ConfirmationComment string
+	Confirmed           bool
+}
+
+func (g *Game) viewGame() *viewGame {
+	a := g.Acceptance()
+	if a == nil {
+		return nil
+	}
+
+	c := g.Challenge()
+	if c == nil {
+		return nil
+	}
+
+	vg := &viewGame{
+		ID:                g.ID(),
+		Timestamp:         IPGSTime{g.head.Timestamp()},
+		ChallengerID:      c.Challenger().ID(),
+		AccepterID:        a.Accepter().ID(),
+		Timeout:           IPGSTime{g.Timeout()},
+		ChallengeComment:  c.Comment(),
+		AcceptanceComment: a.Comment(),
+	}
+
+	o := g.Confirmation()
+	if o != nil {
+		vg.ConfirmationComment = o.Comment()
+		vg.Confirmed = true
+	}
+
+	return vg
+}
+
+func MakeGamesGetHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		var games []*viewGame
+
+		for _, g := range st.Games() {
+			games = append(games, g.viewGame())
+		}
+
+		WriteJSON(w, games, http.StatusOK)
+	}
+}
+
+func MakeGamesGetOneHandler(b *Broker) goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		st := b.Checkout()
+		defer b.Return()
+
+		gameID := pat.Param(ctx, "id")
+
+		game := st.Game(gameID)
+		if game == nil || game.Acceptance() == nil {
+			WriteError(w, errors.Errorf("no game with id '%s'", gameID), http.StatusNotFound)
+			return
+		}
+
+		WriteJSON(w, game.viewGame(), http.StatusOK)
 	}
 }

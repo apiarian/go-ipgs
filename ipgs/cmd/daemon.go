@@ -25,7 +25,6 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/apiarian/go-ipgs/cache"
@@ -77,38 +76,69 @@ to quickly create a Cobra application.`,
 
 		log.Println("connected to IPFS node", id.ID)
 
-		var (
-			st *state.State
-			mx *sync.Mutex
-		)
-		st, err = state.FindLatestState(nodeDir, s, cfg.IPGS.UnpinIPNS)
+		st, err := state.FindLatestState(nodeDir, s, cfg.IPGS.UnpinIPNS)
 		util.FatalIfErr("load latest state", err)
 
-		mx = &sync.Mutex{}
+		b := state.NewBroker(st, nodeDir, s, cfg.IPGS.UnpinIPNS)
 
+		st = b.Checkout()
 		log.Printf("initial state: %+v\n", st)
+		b.Return()
 
-		go periodicallyUpdateState(nodeDir, cfg, s, st, mx)
+		go periodicallyUpdateState(b, s)
 
 		root := goji.NewMux()
+
 		players := goji.SubMux()
 		root.HandleC(pat.New("/players/*"), players)
 
 		players.HandleFuncC(
 			pat.Get("/:id"),
-			state.MakePlayersGetOneHandler(st, mx),
+			state.MakePlayersGetOneHandler(b),
 		)
 		players.HandleFuncC(
 			pat.Patch("/:id"),
-			state.MakePlayersPatchHandler(st, mx, nodeDir, s, cfg.IPGS.UnpinIPNS),
+			state.MakePlayersPatchHandler(b),
 		)
 		players.HandleFuncC(
 			pat.Get("/"),
-			state.MakePlayersGetHandler(st, mx),
+			state.MakePlayersGetHandler(b),
 		)
 		players.HandleFuncC(
 			pat.Post("/"),
-			state.MakePlayersPostHandler(st, mx, nodeDir, s, cfg.IPGS.UnpinIPNS),
+			state.MakePlayersPostHandler(b, s),
+		)
+
+		challenges := goji.SubMux()
+		root.HandleC(pat.New("/challenges/*"), challenges)
+
+		challenges.HandleFuncC(
+			pat.Get("/:id"),
+			state.MakeChallengesGetOneHandler(b),
+		)
+		challenges.HandleFuncC(
+			pat.Post("/:id/accept"),
+			state.MakeChallengesAcceptHandler(b),
+		)
+		challenges.HandleFuncC(
+			pat.Get("/"),
+			state.MakeChallengesGetHandler(b),
+		)
+		challenges.HandleFuncC(
+			pat.Post("/"),
+			state.MakeChallengesPostHandler(b),
+		)
+
+		games := goji.SubMux()
+		root.HandleC(pat.New("/games/*"), games)
+
+		games.HandleFuncC(
+			pat.Get("/:id"),
+			state.MakeGamesGetOneHandler(b),
+		)
+		games.HandleFuncC(
+			pat.Get("/"),
+			state.MakeGamesGetHandler(b),
 		)
 
 		addr := fmt.Sprintf("127.0.0.1:%v", cfg.IPGS.APIPort)
@@ -133,14 +163,11 @@ func init() {
 }
 
 func periodicallyUpdateState(
-	nodeDir string,
-	cfg config.Config,
+	b *state.Broker,
 	s *cachedshell.Shell,
-	st *state.State,
-	mx *sync.Mutex,
 ) {
 	for {
-		updateState(nodeDir, cfg, s, st, mx)
+		updateState(b, s)
 
 		log.Println("sleeping for 5 seconds")
 		time.Sleep(5 * time.Second)
@@ -148,14 +175,11 @@ func periodicallyUpdateState(
 }
 
 func updateState(
-	nodeDir string,
-	cfg config.Config,
+	b *state.Broker,
 	s *cachedshell.Shell,
-	st *state.State,
-	mx *sync.Mutex,
 ) {
-	mx.Lock()
-	defer mx.Unlock()
+	st := b.Checkout()
+	defer b.Return()
 
 	log.Println("updating state")
 
@@ -191,9 +215,9 @@ func updateState(
 	}
 
 	if changed {
-		err := st.Commit(nodeDir, s, cfg.IPGS.UnpinIPNS)
+		err := b.Checkin()
 		if err != nil {
-			log.Printf("failed to commit state: %+v\n", err)
+			log.Printf("failed to checkin state: %+v\n", err)
 		}
 	}
 }

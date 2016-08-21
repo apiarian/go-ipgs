@@ -99,6 +99,202 @@ func (g *Game) ID() string {
 	return g.head.ID()
 }
 
+func (g *Game) Timestamp() time.Time {
+	return g.head.Timestamp()
+}
+
+func (g *Game) Timeout() time.Time {
+	_, ok := g.head.(*GameStep)
+	if ok {
+		// TODO: calculate game timeout based on the game timing rules
+		return time.Now().Add(time.Hour * 24 * 365)
+	}
+
+	o := g.Confirmation()
+	if o != nil {
+		return o.Timeout()
+	}
+
+	a := g.Acceptance()
+	if a != nil {
+		return a.Timeout()
+	}
+
+	c := g.Challenge()
+	if c != nil {
+		return c.Timeout()
+	}
+
+	return time.Time{}
+}
+
+func (g *Game) Players() []*Player {
+	pls := make(map[string]*Player)
+
+	h := g.head
+
+	for {
+		if h == nil {
+			break
+		}
+
+		p := h.Committer()
+		pID := p.ID()
+		if pID != "" {
+			pls[pID] = p
+		}
+
+		h = h.Parent()
+	}
+
+	pp := make([]*Player, len(pls))
+	for _, p := range pls {
+		pp = append(pp, p)
+	}
+
+	return pp
+}
+
+func (g *Game) Merge(o *Game) error {
+	if g.head.Hash() == "" {
+		return errors.New("the base game does not have a hash for its head")
+	}
+
+	if o.head.Hash() == "" {
+		return errors.New("the head game does not have a hash for its head")
+	}
+
+	originalHead := g.head
+
+	h := g.head
+	for {
+		if h == nil {
+			break
+		}
+
+		if h.Hash() == o.head.Hash() {
+			// the head of the merge-head is in the base's history, so already merged
+			return nil
+		}
+
+		h = h.Parent()
+	}
+
+	var future []Commit
+	var foundOurHeadInHistory bool
+	h = o.head
+	for {
+		if h == nil {
+			break
+		}
+
+		if h.Hash() == g.head.Hash() {
+			foundOurHeadInHistory = true
+			break
+		}
+
+		future = append(future, h)
+
+		h = h.Parent()
+	}
+
+	if foundOurHeadInHistory {
+		var err error
+	FUTURE:
+		for i := len(future) - 1; i >= 0; i-- {
+			c := future[i]
+			switch c.(type) {
+			case *Challenge:
+				err = errors.New("found a Challenge in the forked history")
+				break FUTURE
+
+			case *ChallengeAcceptance:
+				err = errors.New("found a Challenge Acceptance in the forked history")
+				break FUTURE
+
+			case *ChallengeConfirmation:
+				a, ok := g.head.(*ChallengeAcceptance)
+				if !ok {
+					err = errors.New("found a Callenge Confirmation but base head is not a Challenge Acceptance")
+					break FUTURE
+				}
+
+				x := c.(*ChallengeConfirmation)
+
+				sig := make([]byte, len(x.signature))
+				copy(sig, x.signature)
+
+				y := &ChallengeConfirmation{
+					timeout:    x.timeout,
+					comment:    x.comment,
+					acceptance: a,
+					confirmer:  x.confirmer,
+					timestamp:  x.timestamp,
+					signature:  sig,
+					hash:       x.hash,
+				}
+				err = y.Verify()
+				if err != nil {
+					err = errors.Wrap(err, "failed to verify cloned challenge confirmation")
+					break FUTURE
+				}
+
+				g.head = y
+				err = g.validate()
+				if err != nil {
+					err = errors.Wrap(err, "failed to merge confirmation")
+					break FUTURE
+				}
+
+			case *GameStep:
+				t := g.head.Type()
+				if t != CommitTypeChallengeAcceptance && t != CommitTypeGameStep {
+					err = errors.New("found a Game Step but the base head is not a Challenge Acceptance or Game Step")
+					break FUTURE
+				}
+
+				x := c.(*GameStep)
+
+				dat := make([]byte, len(x.data))
+				copy(dat, x.data)
+
+				sig := make([]byte, len(x.signature))
+				copy(sig, x.signature)
+
+				y := &GameStep{
+					player:    x.player,
+					data:      dat,
+					parent:    g.head,
+					timestamp: x.timestamp,
+					signature: sig,
+					hash:      x.hash,
+				}
+				err = y.Verify()
+				if err != nil {
+					err = errors.Wrap(err, "failed to verify cloned game step")
+				}
+
+				g.head = y
+				err = g.validate()
+				if err != nil {
+					err = errors.Wrap(err, "failed to merge game step")
+					break FUTURE
+				}
+			}
+		}
+
+		if err != nil {
+			g.head = originalHead
+			return errors.Wrap(err, "failed to merge other game simply")
+		}
+	} else {
+		// TODO: support non-fast-forward merges...
+		return errors.New("non-fast-forward merges are not supported")
+	}
+
+	return nil
+}
+
 func CreateGame(
 	challenger *Player,
 	exp time.Duration,
