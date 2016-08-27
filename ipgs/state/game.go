@@ -95,6 +95,27 @@ func (g *Game) Steps() []*GameStep {
 	return s
 }
 
+func (g *Game) Commits() []Commit {
+	var s []Commit
+
+	p := g.head
+	for {
+		if p == nil {
+			break
+		}
+
+		s = append(s, p)
+
+		p = p.Parent()
+	}
+
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+
+	return s
+}
+
 func (g *Game) ID() string {
 	return g.head.ID()
 }
@@ -156,140 +177,168 @@ func (g *Game) Players() []*Player {
 }
 
 func (g *Game) Merge(o *Game) error {
-	if g.head.Hash() == "" {
-		return errors.New("the base game does not have a hash for its head")
+	gs := g.Commits()
+	os := o.Commits()
+
+	for _, c := range gs {
+		if c.Hash() == "" {
+			return errors.Errorf("no hash for commit %s in this game", c.ID())
+		}
+	}
+	for _, c := range os {
+		if c.Hash() == "" {
+			return errors.Errorf("no has for commit %s in other game", c.ID())
+		}
 	}
 
-	if o.head.Hash() == "" {
-		return errors.New("the head game does not have a hash for its head")
+	var cl int // common length
+	for i, cg := range gs {
+		if i >= len(os) {
+			break
+		}
+
+		co := os[i]
+
+		if cg.Hash() == co.Hash() {
+			cl = i + 1
+			continue
+		} else {
+			break
+		}
 	}
 
-	originalHead := g.head
+	if cl == 0 {
+		return errors.New("the two games do not share a common history")
+	}
+
+	var common, gTail, oTail, newTail, clonedTail []Commit
+	common = gs[0:cl]
+	if cl <= len(gs) {
+		gTail = gs[cl:]
+	}
+	if cl <= len(os) {
+		oTail = os[cl:]
+	}
+	lastCommon := common[len(common)-1]
+
+	if len(oTail) == 0 {
+		// the other game has no commits that we don't already have
+		return nil
+	}
+
+	if len(gTail) == 0 {
+		// the other game has all of the new commits
+		newTail = oTail
+	} else {
+		// both games have new commits
+		return errors.New("the two games have diverged")
+	}
+
+	for i, c := range newTail {
+		var head Commit
+		if i == 0 {
+			head = lastCommon
+		} else {
+			head = clonedTail[len(clonedTail)-1]
+		}
+
+		switch c.(type) {
+		case *Challenge:
+			return errors.New("found a Challenge in the new tail; just copy the game, don't merge it")
+
+		case *ChallengeAcceptance:
+			ch, ok := head.(*Challenge)
+			if !ok {
+				return errors.New("previous commit is not a challenge")
+			}
+
+			x := c.(*ChallengeAcceptance)
+
+			sig := make([]byte, len(x.signature))
+			copy(sig, x.signature)
+
+			y := &ChallengeAcceptance{
+				timeout:   x.timeout,
+				comment:   x.comment,
+				challenge: ch,
+				accepter:  x.accepter,
+				timestamp: x.timestamp,
+				signature: sig,
+				hash:      x.hash,
+			}
+			err := y.Verify()
+			if err != nil {
+				return errors.Wrap(err, "failed to verify cloned challenge acceptance")
+			}
+
+			clonedTail = append(clonedTail, y)
+
+		case *ChallengeConfirmation:
+			ca, ok := head.(*ChallengeAcceptance)
+			if !ok {
+				return errors.New("previous commit is not a challenge acceptance")
+			}
+
+			x := c.(*ChallengeConfirmation)
+
+			sig := make([]byte, len(x.signature))
+			copy(sig, x.signature)
+
+			y := &ChallengeConfirmation{
+				timeout:    x.timeout,
+				comment:    x.comment,
+				acceptance: ca,
+				confirmer:  x.confirmer,
+				timestamp:  x.timestamp,
+				signature:  sig,
+				hash:       x.hash,
+			}
+			err := y.Verify()
+			if err != nil {
+				return errors.Wrap(err, "failed to verify cloned challenge confirmation")
+			}
+
+			clonedTail = append(clonedTail, y)
+
+		case *GameStep:
+			_, okCC := head.(*ChallengeConfirmation)
+			_, okGS := head.(*GameStep)
+			if !(okCC || okGS) {
+				return errors.New("previous commit is not a challenge confirmation or game step")
+			}
+
+			x := c.(*GameStep)
+
+			dat := make([]byte, len(x.data))
+			copy(dat, x.data)
+
+			sig := make([]byte, len(x.signature))
+			copy(sig, x.signature)
+
+			y := &GameStep{
+				player:    x.player,
+				data:      dat,
+				parent:    head,
+				timestamp: x.timestamp,
+				signature: sig,
+				hash:      x.hash,
+			}
+
+			err := y.Verify()
+			if err != nil {
+				return errors.Wrap(err, "failed to verify cloned game step")
+			}
+
+			clonedTail = append(clonedTail, y)
+		}
+	}
 
 	h := g.head
-	for {
-		if h == nil {
-			break
-		}
-
-		if h.Hash() == o.head.Hash() {
-			// the head of the merge-head is in the base's history, so already merged
-			return nil
-		}
-
-		h = h.Parent()
-	}
-
-	var future []Commit
-	var foundOurHeadInHistory bool
-	h = o.head
-	for {
-		if h == nil {
-			break
-		}
-
-		if h.Hash() == g.head.Hash() {
-			foundOurHeadInHistory = true
-			break
-		}
-
-		future = append(future, h)
-
-		h = h.Parent()
-	}
-
-	if foundOurHeadInHistory {
-		var err error
-	FUTURE:
-		for i := len(future) - 1; i >= 0; i-- {
-			c := future[i]
-			switch c.(type) {
-			case *Challenge:
-				err = errors.New("found a Challenge in the forked history")
-				break FUTURE
-
-			case *ChallengeAcceptance:
-				err = errors.New("found a Challenge Acceptance in the forked history")
-				break FUTURE
-
-			case *ChallengeConfirmation:
-				a, ok := g.head.(*ChallengeAcceptance)
-				if !ok {
-					err = errors.New("found a Callenge Confirmation but base head is not a Challenge Acceptance")
-					break FUTURE
-				}
-
-				x := c.(*ChallengeConfirmation)
-
-				sig := make([]byte, len(x.signature))
-				copy(sig, x.signature)
-
-				y := &ChallengeConfirmation{
-					timeout:    x.timeout,
-					comment:    x.comment,
-					acceptance: a,
-					confirmer:  x.confirmer,
-					timestamp:  x.timestamp,
-					signature:  sig,
-					hash:       x.hash,
-				}
-				err = y.Verify()
-				if err != nil {
-					err = errors.Wrap(err, "failed to verify cloned challenge confirmation")
-					break FUTURE
-				}
-
-				g.head = y
-				err = g.validate()
-				if err != nil {
-					err = errors.Wrap(err, "failed to merge confirmation")
-					break FUTURE
-				}
-
-			case *GameStep:
-				t := g.head.Type()
-				if t != CommitTypeChallengeAcceptance && t != CommitTypeGameStep {
-					err = errors.New("found a Game Step but the base head is not a Challenge Acceptance or Game Step")
-					break FUTURE
-				}
-
-				x := c.(*GameStep)
-
-				dat := make([]byte, len(x.data))
-				copy(dat, x.data)
-
-				sig := make([]byte, len(x.signature))
-				copy(sig, x.signature)
-
-				y := &GameStep{
-					player:    x.player,
-					data:      dat,
-					parent:    g.head,
-					timestamp: x.timestamp,
-					signature: sig,
-					hash:      x.hash,
-				}
-				err = y.Verify()
-				if err != nil {
-					err = errors.Wrap(err, "failed to verify cloned game step")
-				}
-
-				g.head = y
-				err = g.validate()
-				if err != nil {
-					err = errors.Wrap(err, "failed to merge game step")
-					break FUTURE
-				}
-			}
-		}
-
-		if err != nil {
-			g.head = originalHead
-			return errors.Wrap(err, "failed to merge other game simply")
-		}
-	} else {
-		// TODO: support non-fast-forward merges...
-		return errors.New("non-fast-forward merges are not supported")
+	g.head = clonedTail[len(clonedTail)-1]
+	err := g.validate()
+	if err != nil {
+		g.head = h
+		return errors.Wrap(err, "failed to update game head")
 	}
 
 	return nil
@@ -322,7 +371,13 @@ func CreateGame(
 		return nil, errors.Wrap(err, "failed to create challenge")
 	}
 
-	return &Game{head: ch}, nil
+	g := &Game{head: ch}
+	err = g.validate()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create game")
+	}
+
+	return g, nil
 }
 
 func (g *Game) Accept(
@@ -361,7 +416,13 @@ func (g *Game) Accept(
 		return errors.Wrap(err, "failed to create challenge acceptance")
 	}
 
+	h := g.head
 	g.head = ca
+	err = g.validate()
+	if err != nil {
+		g.head = h
+		return errors.Wrap(err, "failed to add challenge acceptance to game")
+	}
 
 	return nil
 }
@@ -406,7 +467,13 @@ func (g *Game) Confirm(
 		return errors.Wrap(err, "failed to create challenge confirmation")
 	}
 
+	h := g.head
 	g.head = cc
+	err = g.validate()
+	if err != nil {
+		g.head = h
+		return errors.Wrap(err, "failed to add challenge confirmation to game")
+	}
 
 	return nil
 }
@@ -445,12 +512,42 @@ func (g *Game) Step(
 		return errors.Wrap(err, "failed to create game step")
 	}
 
+	h := g.head
 	g.head = gs
+	err = g.validate()
+	if err != nil {
+		g.head = h
+		return errors.Wrap(err, "failed to add game step to game")
+	}
 
 	return nil
 }
 
 func (g *Game) validate() error {
+	for i, c := range g.Commits() {
+		switch i {
+		case 0:
+			if _, ok := c.(*Challenge); !ok {
+				return errors.New("the first commit is not a challenge")
+			}
+
+		case 1:
+			if _, ok := c.(*ChallengeAcceptance); !ok {
+				return errors.New("the second commit is not a challenge acceptance")
+			}
+
+		case 2:
+			if _, ok := c.(*ChallengeConfirmation); !ok {
+				return errors.New("the third commit is not a challenge confirmation")
+			}
+
+		default:
+			if _, ok := c.(*GameStep); !ok {
+				return errors.Errorf("commit number %d is not a game step", i+1)
+			}
+		}
+	}
+
 	if g.Challenge() != nil && g.Confirmation() != nil {
 		if g.Challenge().Challenger().ID() != g.Confirmation().Confirmer().ID() {
 			return errors.New("the game was not confirmed by the challenger")

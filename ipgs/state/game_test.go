@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"testing"
 	"time"
@@ -429,6 +430,176 @@ func TestGameLifecycle(t *testing.T) {
 	}
 }
 
+func (g *Game) mockPublish() {
+	if g.head == nil {
+		return
+	}
+
+	if g.head.Hash() != "" {
+		return
+	}
+
+	ch, ok := g.head.(*Challenge)
+	if ok {
+		ch.hash = base64.StdEncoding.EncodeToString(ch.Signature())
+		return
+	}
+
+	ca, ok := g.head.(*ChallengeAcceptance)
+	if ok {
+		ca.hash = base64.StdEncoding.EncodeToString(ca.Signature())
+		return
+	}
+
+	cc, ok := g.head.(*ChallengeConfirmation)
+	if ok {
+		cc.hash = base64.StdEncoding.EncodeToString(cc.Signature())
+		return
+	}
+
+	gs, ok := g.head.(*GameStep)
+	if ok {
+		gs.hash = base64.StdEncoding.EncodeToString(gs.Signature())
+		return
+	}
+}
+
+func TestGameMerge(t *testing.T) {
+	var pls []*Player
+	for i := 0; i < 3; i++ {
+		priv, err := crypto.NewPrivateKey()
+		fatalIfErr(t, "failed to create private key", err)
+
+		pls = append(pls, NewPlayer(
+			NewPublicKey(priv.GetPublicKey(), fmt.Sprintf("player-%d-public-key", i)),
+			NewPrivateKey(priv),
+		))
+	}
+
+	timeout := 5 * time.Hour
+
+	g, err := CreateGame(pls[0], timeout, "test game")
+	fatalIfErr(t, "failed to create a game", err)
+	g.mockPublish()
+
+	t.Logf("g.Challenge() = %+v\n", g.Challenge())
+
+	b := &bytes.Buffer{}
+	err = g.Write(b)
+	fatalIfErr(t, "failed to write the game", err)
+	b2 := &bytes.Buffer{}
+	err = g.Write(b2)
+	fatalIfErr(t, "failed to write the game again", err)
+
+	o, err := ReadGame(b, pls)
+	fatalIfErr(t, "failed to read the game", err)
+
+	t.Logf("o.Challenge() = %+v\n", o.Challenge())
+
+	if g.Challenge().Hash() != o.Challenge().Hash() {
+		t.Fatal("the two challenges are not the same")
+	}
+
+	err = o.Accept(pls[1], timeout, "lets go")
+	fatalIfErr(t, "failed to accept the game", err)
+	o.mockPublish()
+
+	// we should be able to merge games once we have a common challenge
+
+	err = g.Merge(o)
+	fatalIfErr(t, "failed to merge the accepted game", err)
+
+	if g.Acceptance().Hash() != o.Acceptance().Hash() {
+		t.Fatal("the two acceptances are not the same")
+	}
+
+	if g.Acceptance() == o.Acceptance() {
+		t.Fatal("the two acceptances are the same object, not clones")
+	}
+
+	o2, err := ReadGame(b2, pls)
+	fatalIfErr(t, "failed to read the game again", err)
+
+	t.Logf("o2.Challenge() = %+v\n", o2.Challenge())
+
+	if g.Challenge().Hash() != o2.Challenge().Hash() {
+		t.Fatal("the other challenge is not the same as the original")
+	}
+
+	err = o2.Accept(pls[2], timeout, "lets go too")
+	fatalIfErr(t, "failed to accept the game as another player", err)
+	o2.mockPublish()
+
+	// we should not be able to merge games that would end up with multiple
+	// acceptances
+
+	h := g.head
+	err = g.Merge(o2)
+	t.Logf("o2 merge err = %+v\n", err)
+	if err == nil {
+		t.Fatal("managed to merge an alternate accepted game")
+	}
+	if h != g.head {
+		t.Fatal("the game head commit changed despite running into a merge error")
+	}
+
+	err = g.Confirm(pls[0], timeout, "make it so")
+	fatalIfErr(t, "failed to confirm the game", err)
+	g.mockPublish()
+
+	// we should be able to merge something that has already been merged without
+	// trouble
+
+	h = g.head
+	err = g.Merge(o)
+	fatalIfErr(t, "failed to merge an already merged game", err)
+	if h != g.head {
+		t.Fatal("merging an already merged game should have been a noop")
+	}
+
+	err = g.Step(pls[0], []byte("move 1"))
+	fatalIfErr(t, "failed to make the first move", err)
+	g.mockPublish()
+
+	// we should be able to merge multiple steps forward
+
+	err = o.Merge(g)
+	fatalIfErr(t, "failed to merge a couple of steps forward", err)
+
+	if g.head.Hash() != o.head.Hash() {
+		t.Fatal("the merged games don't have the same head")
+	}
+
+	err = o.Step(pls[1], []byte("move 2"))
+	fatalIfErr(t, "failed to make the second move", err)
+	o.mockPublish()
+
+	b.Reset()
+	err = o.Write(b)
+	fatalIfErr(t, "failed to write the other game", err)
+	o3, err := ReadGame(b, pls)
+	fatalIfErr(t, "failed to read the other game", err)
+
+	// we should be able to merge the game with another game step
+
+	err = g.Merge(o3)
+	fatalIfErr(t, "failed to merge the other game after it was loaded again", err)
+
+	if g.head.Hash() != o.head.Hash() {
+		t.Fatal("the merged games do not have the same head after two moves")
+	}
+
+	x, err := CreateGame(pls[0], timeout, "totally different game")
+	fatalIfErr(t, "failed to create a totally separate game", err)
+	x.mockPublish()
+
+	err = g.Merge(x)
+	t.Logf("separate merge err = %+v\n", err)
+	if err == nil {
+		t.Fatal("somehow merged totally separate games")
+	}
+}
+
 func TestGamePlayerPermissions(t *testing.T) {
 	var pls []*Player
 	for i := 0; i < 3; i++ {
@@ -443,15 +614,11 @@ func TestGamePlayerPermissions(t *testing.T) {
 
 	g, err := CreateGame(pls[0], 5*time.Hour, "test game")
 	fatalIfErr(t, "failed to create a game", err)
-
-	// fake publish
-	g.head.(*Challenge).hash = "challenge-hash"
+	g.mockPublish()
 
 	err = g.Accept(pls[1], 5*time.Hour, "lets go")
 	fatalIfErr(t, "failed to accept the game", err)
-
-	//fake publish
-	g.head.(*ChallengeAcceptance).hash = "acceptance-hash"
+	g.mockPublish()
 
 	err = g.Confirm(pls[2], 5*time.Hour, "butting in")
 	if err == nil {
@@ -465,9 +632,7 @@ func TestGamePlayerPermissions(t *testing.T) {
 
 	err = g.Confirm(pls[0], 5*time.Hour, "real confirmation")
 	fatalIfErr(t, "failed to confirm the game", err)
-
-	// fake publish
-	g.head.(*ChallengeConfirmation).hash = "confirmation-hash"
+	g.mockPublish()
 
 	err = g.Step(pls[2], []byte("barging-in"))
 	fatalIfErr(t, "failed to barge into a game", err)
