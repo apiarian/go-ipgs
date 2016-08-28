@@ -168,12 +168,16 @@ func (g *Game) Players() []*Player {
 		h = h.Parent()
 	}
 
-	pp := make([]*Player, len(pls))
+	var pp []*Player
 	for _, p := range pls {
 		pp = append(pp, p)
 	}
 
 	return pp
+}
+
+func (g *Game) clone() *Game {
+	return &Game{head: g.head.clone()}
 }
 
 func (g *Game) Merge(o *Game) error {

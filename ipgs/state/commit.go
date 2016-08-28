@@ -34,6 +34,7 @@ type Commit interface {
 	Verify() error
 	IpfsJsonData() ([]byte, error)
 	Publish(*cachedshell.Shell) (string, error)
+	clone() Commit
 }
 
 func signCommit(c Commit) ([]byte, error) {

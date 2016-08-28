@@ -157,6 +157,10 @@ func TestStateReadWrite(t *testing.T) {
 	i2, err = s.AcceptGame(i2, 5*time.Hour, "test acceptance")
 	fatalIfErr(t, "failed to accept the second game", err)
 
+	if len(s.games) != 3 {
+		t.Fatal("don't have 3 games")
+	}
+
 	err = s.Write(nodeDir)
 	fatalIfErr(t, "failed to write state to directory", err)
 
@@ -179,8 +183,8 @@ func TestStateReadWrite(t *testing.T) {
 		}
 	}
 
-	if len(l.games) != 2 {
-		t.Fatal("did not load 2 games")
+	if len(l.games) != 3 {
+		t.Fatal("did not load 3 games")
 	}
 
 	if l.Game(i1).ID() != s.Game(i1).ID() {
@@ -435,4 +439,185 @@ func TestStateCommitFind(t *testing.T) {
 	}
 
 	os.RemoveAll(nodeDir)
+}
+
+func (st *State) mockPublish() {
+	for _, g := range st.games {
+		g.mockPublish()
+	}
+}
+
+func TestStateIntractions(t *testing.T) {
+	var pPriv, pPub []*Player
+	for i := 0; i < 3; i++ {
+		priv, err := crypto.NewPrivateKey()
+		fatalIfErr(t, fmt.Sprintf("failed to create private key %v", i), err)
+
+		pPriv = append(pPriv, NewPlayer(
+			NewPublicKey(priv.GetPublicKey(), fmt.Sprintf("player-%d-public-key", i)),
+			NewPrivateKey(priv),
+		))
+		pPriv[i].Name = fmt.Sprintf("player-%d", i)
+
+		pPub = append(pPub, NewPlayer(
+			NewPublicKey(priv.GetPublicKey(), fmt.Sprintf("player-%d-public-key", i)),
+			nil,
+		))
+		pPub[i].Name = fmt.Sprintf("player-%d", i)
+	}
+
+	var st []*State
+	for i := 0; i < 3; i++ {
+		s := NewState()
+		s.LastUpdated = time.Now()
+		s.Owner = pPriv[i]
+		s.mockPublish()
+		st = append(st, s)
+	}
+
+	// 0 and 1 know about each-other
+	// 1 and 2 know about each-other
+	// 0 and 2 do not know about each-other
+
+	st[0].AddPlayer(pPub[1])
+	st[1].AddPlayer(pPub[0])
+	st[1].AddPlayer(pPub[2])
+	st[2].AddPlayer(pPub[1])
+
+	t.Logf("st[0] known players: %+v\n", st[0].Players)
+	t.Logf("st[1] known players: %+v\n", st[1].Players)
+
+	ch, err := st[0].Combine(st[1])
+	fatalIfErr(t, "failed to combine base state 0 and state 1", err)
+	if ch {
+		t.Fatal("there should have been no changes yet")
+	}
+
+	t.Logf("st[0] known players: %+v\n", st[0].Players)
+	t.Logf("st[1] known players: %+v\n", st[1].Players)
+
+	_, err = st[0].Combine(st[2])
+	if err == nil {
+		t.Fatal("should not be able to combine state when we don't know the owner")
+	}
+
+	timeout := 5 * time.Hour
+
+	chID, err := st[0].CreateGame(timeout, "lets go")
+	fatalIfErr(t, "failed to create first game", err)
+
+	if len(st[0].Challenges()) != 1 {
+		t.Fatal("state 0 does not seem to have one challenge")
+	}
+
+	st[0].mockPublish()
+
+	ch, err = st[1].Combine(st[0])
+	fatalIfErr(t, "failed to combine state 1 with a new challenge from state 0", err)
+	if !ch {
+		t.Fatal("adding a new challenge to state 1 should be a change")
+	}
+
+	t.Logf("st[1] known players: %+v\n", st[1].Players)
+
+	if len(st[1].Challenges()) != 1 {
+		t.Fatal("state 1 does not seem to know about one challenge")
+	}
+
+	gID, err := st[1].AcceptGame(chID, timeout, "challenge accepted")
+	fatalIfErr(t, "failed to accept challenge at state 1", err)
+
+	t.Logf("st[1].games = %+v\n", st[1].games)
+	t.Logf("st[1].Challenges() = %+v\n", st[1].Challenges())
+	t.Logf("st[1].Games() = %+v\n", st[1].Games())
+
+	if len(st[1].Challenges()) != 1 {
+		t.Fatal("state 1 should still list the accepted game as a challenge")
+	}
+
+	if len(st[1].Games()) != 1 {
+		t.Fatal("state 1 does not seem to have the accepted game listed")
+	}
+
+	st[1].mockPublish()
+
+	ch, err = st[0].Combine(st[1])
+	fatalIfErr(t, "failed to combine state 0 with the accepted challenge from state 1", err)
+	if !ch {
+		t.Fatal("adding a challenge acceptance should be a change")
+	}
+
+	t.Logf("st[0] known players: %+v\n", st[0].Players)
+	t.Logf("st[1] known players: %+v\n", st[1].Players)
+
+	t.Logf("st[0].games = %+v\n", st[0].games)
+	t.Logf("st[0].Challenges() = %+v\n", st[0].Challenges())
+	t.Logf("st[0].Games() = %+v\n", st[0].Games())
+
+	if len(st[0].Challenges()) != 1 {
+		t.Fatal("state should still list the accepted game as a challenge")
+	}
+
+	if len(st[0].Games()) != 1 {
+		t.Fatal("state 0 does not seem to noticed that the game has been accepted")
+	}
+
+	err = st[0].ConfirmGame(gID, timeout, "ok sure lets go")
+	fatalIfErr(t, "failed to confirm the game at state 0", err)
+
+	if len(st[0].Challenges()) != 0 {
+		t.Fatal("state 0 should now not list the challenge as such")
+	}
+
+	if len(st[0].games) != 1 {
+		t.Fatal("the game should have been removed from the available challenges")
+	}
+
+	st[0].mockPublish()
+
+	err = st[0].StepGame(gID, []byte("step 1"))
+	fatalIfErr(t, "failed to add the initial step to the game", err)
+
+	st[0].mockPublish()
+
+	t.Logf("st[0] game players: %+v\n", st[0].games[gID].Players())
+	h := st[0].games[gID].head
+	for {
+		if h == nil {
+			break
+		}
+
+		t.Log("st[0] commit type", h.Type())
+		t.Log("st[0] committer", h.Committer())
+
+		h = h.Parent()
+	}
+
+	ch, err = st[1].Combine(st[0])
+	fatalIfErr(t, "failed to combine state 1 with the newly running game from 0", err)
+	if !ch {
+		t.Fatal("confirming and making step should count as a change")
+	}
+
+	if len(st[1].Challenges()) != 0 {
+		t.Fatal("state 1 should no not publish the challenge")
+	}
+
+	if len(st[1].Games()) != 1 {
+		t.Fatal("state 1 should now only list a single game")
+	}
+
+	if len(st[1].games) != 1 {
+		t.Fatal("state 1 should only have a single game in its internal storage")
+	}
+
+	ch, err = st[2].Combine(st[1])
+	fatalIfErr(t, "failed to combine state 2 with the new game from state 1", err)
+	if ch {
+		t.Fatal("we shouldn't have made any changes yet because we don't know how to deal with unknown players")
+	}
+
+	if len(st[2].games) != 0 {
+		t.Fatal("state 2 should not have any games yet since it doesn't know player 0")
+	}
 }

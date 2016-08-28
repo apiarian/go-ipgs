@@ -123,11 +123,14 @@ func (st *State) Write(nodeDir string) error {
 		return errors.Wrap(err, "failed to create games directory")
 	}
 
-	for k, g := range st.games {
+	games := st.Challenges()
+	games = append(games, st.Games()...)
+
+	for _, g := range games {
 		f, err := os.Create(
 			filepath.Join(
 				gms,
-				fmt.Sprintf("%s.json", k),
+				fmt.Sprintf("%s.json", g.ID()),
 			),
 		)
 		if err != nil {
@@ -237,6 +240,24 @@ func (st *State) Read(nodeDir string) error {
 		g, err := ReadGame(gmF, playerLib)
 		if err != nil {
 			return errors.Wrap(err, "failed to read game from file")
+		}
+
+		if g.Confirmation() == nil {
+			i := g.Challenge().ID()
+
+			if i == "" {
+				return errors.Errorf("game loaded from %s has an emtpy challenge ID", gfInfo.Name())
+			}
+
+			if _, ok := st.games[i]; ok {
+				return errors.Errorf("game with id %s already esists", i)
+			}
+
+			st.games[i] = g
+		}
+
+		if g.Acceptance() == nil {
+			continue
 		}
 
 		i := g.ID()
@@ -607,81 +628,80 @@ func (s *State) Combine(o *State) (bool, error) {
 	}
 
 	for _, g := range o.Challenges() {
-		// check if we already know about this challenge
-		//   if we do, we can ignore it
-		// check if we ourselves have already accepted the challenge
-		//   if we did, we can ignore it
-		// check if the challenge has already been confirmed
-		//   if so, we can ignore it
-		// check if we know the player who issued the challenge
-		//   if we do, we should add it to our list
-		//   if we do not, we should add it to the gossip list
-
-		if ok := s.Game(g.ID()); ok != nil {
+		if g.Acceptance() != nil {
+			// this is not a pure challenge, well deal with it in the games list
 			continue
 		}
 
-		var alreadyAccepted bool
-		for _, x := range s.Games() {
-			if x.Challenge().ID() == g.Challenge().ID() {
-				if x.Acceptance().Accepter().ID() == s.Owner.ID() {
-					alreadyAccepted = true
-					break
-				}
-			}
-		}
-		if alreadyAccepted {
+		if ok := s.Game(g.Challenge().ID()); ok != nil {
+			// we already know about this challenge
 			continue
 		}
 
 		var alreadyConfirmed bool
 		for _, x := range s.Games() {
-			if x.Challenge().ID() == g.Challenge().ID() {
-				if c := x.Confirmation(); c != nil {
-					alreadyConfirmed = true
-					break
-				}
+			if x.Challenge().ID() == g.Challenge().ID() && x.Confirmation() != nil {
+				alreadyConfirmed = true
+				break
 			}
 		}
 		if alreadyConfirmed {
+			// we already know about a confirmation for this challenge, so it isn't
+			// valid anymore
 			continue
 		}
 
-		if p := s.PlayerForID(g.Challenge().Challenger().ID()); p != nil {
-			s.games[g.ID()] = g
+		if s.PlayerForID(g.Challenge().Challenger().ID()) != nil {
+			// we know about the player
+			_, err := s.AddGame(g)
+			if err != nil {
+				return changed, errors.Wrap(err, "failed to add challenge")
+			}
 			changed = true
 		} else {
-			// TODO: add it to the "challenge gossip" set, with a way to add the
-			// player to our state and start responding to their challenges
+			// we do not know about the player
+			log.Println("TODO: add a challenge to the gossip list")
 		}
 	}
 
 	for _, g := range o.Games() {
-		// check if we already know about this game
-		//   if we do, we need to combine our version of the game with the remote  one
-		//   if we do not, but we know the players who started it, we need at add it to our list
-		//   if we do not, and we do not know the players, add it to the games gossip list
-		ourG := s.Game(g.ID())
+		knowAll := true
+		for _, p := range g.Players() {
+			if s.PlayerForID(p.ID()) == nil {
+				knowAll = false
+				break
+			}
+		}
 
-		if ourG != nil {
-			c, err := s.UpdateGame(g.ID(), g)
-			if err != nil {
-				return changed, errors.Wrap(err, "failed to update game")
-			}
-			if c {
-				changed = true
-			}
-		} else {
-			c := s.PlayerForID(g.Challenge().Challenger().ID())
-			a := s.PlayerForID(g.Challenge().Challenger().ID())
-			if c != nil && a != nil {
+		if ours := s.Game(g.ID()); ours == nil {
+			// we don't know about this game yet
+			if knowAll {
+				// we know all of the players involved
 				_, err := s.AddGame(g)
 				if err != nil {
 					return changed, errors.Wrap(err, "failed to add game")
 				}
+				changed = true
 			} else {
-				// TODO: add it to the "games gossip" set, with a way to add the
-				// players in volved to our state and start watching the game
+				// we don't know all of the players involved
+				log.Println("TODO: add a game to the gossip list")
+			}
+		} else {
+			// we do know about the game already
+			if knowAll {
+				// we know all of the players involved
+				err := ours.Merge(g)
+				if err != nil {
+					return changed, errors.Wrap(err, "failed to merge game with ours")
+				}
+				changed = true
+
+				if ours.Confirmation() != nil {
+					delete(s.games, ours.Challenge().ID())
+				}
+			} else {
+				// we don't know all of the players involved
+				log.Println("TODO: add a game to the gossip list")
 			}
 		}
 	}
@@ -696,9 +716,12 @@ func (st *State) Game(id string) *Game {
 func (st *State) Challenges() []*Game {
 	var c []*Game
 
+	added := make(map[string]bool)
+
 	for _, g := range st.games {
-		if g.Acceptance() == nil && g.Challenge() != nil {
+		if !added[g.Challenge().ID()] && g.Confirmation() == nil && g.Challenge() != nil {
 			c = append(c, g)
+			added[g.Challenge().ID()] = true
 		}
 	}
 
@@ -708,9 +731,12 @@ func (st *State) Challenges() []*Game {
 func (st *State) Games() []*Game {
 	var a []*Game
 
+	added := make(map[string]bool)
+
 	for _, g := range st.games {
-		if g.Acceptance() != nil && g.Challenge() != nil {
+		if !added[g.ID()] && g.Acceptance() != nil && g.Challenge() != nil {
 			a = append(a, g)
+			added[g.ID()] = true
 		}
 	}
 
@@ -737,40 +763,9 @@ func (st *State) AddGame(g *Game) (string, error) {
 		}
 	}
 
-	for _, p := range g.Players() {
-		_ = st.AddPlayer(p)
-	}
-
-	st.games[i] = g
+	st.games[i] = g.clone()
 
 	return i, nil
-}
-
-func (st *State) UpdateGame(id string, g *Game) (bool, error) {
-	ours := st.Game(id)
-	if ours == nil {
-		return false, errors.Errorf("could not find game with ID %s", id)
-	}
-
-	h := g.head.Hash()
-
-	err := ours.Merge(g)
-	if err != nil {
-		return false, errors.Wrap(err, "failed to merge games")
-	}
-
-	var changed bool
-	if g.Confirmation() != nil {
-		for _, c := range st.Challenges() {
-			if g.Challenge().ID() == c.ID() {
-				delete(st.games, c.ID())
-				changed = true
-				break
-			}
-		}
-	}
-
-	return changed || g.head.Hash() != h, nil
 }
 
 func (st *State) CreateGame(exp time.Duration, c string) (string, error) {
@@ -821,7 +816,6 @@ func (st *State) AcceptGame(id string, exp time.Duration, c string) (string, err
 		return "", errors.Errorf("this game id %s has already been accepted", i)
 	}
 
-	delete(st.games, id)
 	st.games[i] = g
 
 	return i, nil
@@ -846,6 +840,8 @@ func (st *State) ConfirmGame(id string, exp time.Duration, c string) error {
 	if i != id {
 		return errors.Errorf("confirmed game has a different id: %s", i)
 	}
+
+	delete(st.games, g.Challenge().ID())
 
 	return nil
 }

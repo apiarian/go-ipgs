@@ -163,3 +163,18 @@ func (c *ChallengeConfirmation) Publish(s *cachedshell.Shell) (string, error) {
 
 	return c.hash, nil
 }
+
+func (c *ChallengeConfirmation) clone() Commit {
+	sig := make([]byte, len(c.signature))
+	copy(sig, c.signature)
+
+	return &ChallengeConfirmation{
+		timeout:    c.timeout,
+		comment:    c.comment,
+		acceptance: c.acceptance.clone().(*ChallengeAcceptance),
+		confirmer:  c.confirmer,
+		timestamp:  c.timestamp,
+		signature:  sig,
+		hash:       c.hash,
+	}
+}

@@ -168,3 +168,20 @@ func (g *GameStep) Publish(s *cachedshell.Shell) (string, error) {
 
 	return g.hash, nil
 }
+
+func (g *GameStep) clone() Commit {
+	dat := make([]byte, len(g.data))
+	copy(dat, g.data)
+
+	sig := make([]byte, len(g.signature))
+	copy(sig, g.signature)
+
+	return &GameStep{
+		player:    g.player,
+		data:      dat,
+		parent:    g.parent.clone(),
+		timestamp: g.timestamp,
+		signature: sig,
+		hash:      g.hash,
+	}
+}
